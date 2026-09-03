@@ -39,8 +39,9 @@ pub const Process = struct {
     parent_pid: u64,
     // sys_exit status-koodi zombie-tilassa (Vaihe 24).
     exit_code: u32,
+    // Per-process sivutaulun fyysinen PML4-osoite — Vaihe 25 (0 = ei erillistä).
+    page_table: u64,
 };
-
 // Ladatun prosessin suoritustiedot — runProcess/spawn.
 pub const LoadedProcess = struct {
     // ELF e_entry.
@@ -82,6 +83,8 @@ pub fn initCore() void {
         p.parent_pid = NO_PARENT;
         // Ei exit-koodia ennen sys_exit.
         p.exit_code = 0;
+        // Ei erillistä sivutaulua nollauksen aikana.
+        p.page_table = 0;
     }
     // Ei rekisteröityjä prosesseja.
     used_count = 0;
@@ -124,6 +127,7 @@ pub fn allocProcess(pid: u64) bool {
             .state = .running,
             .parent_pid = NO_PARENT,
             .exit_code = 0,
+            .page_table = 0,
         };
         // Yksi prosessi rekisteröity.
         used_count = 1;
@@ -147,6 +151,7 @@ pub fn allocProcess(pid: u64) bool {
         .state = .running,
         .parent_pid = NO_PARENT,
         .exit_code = 0,
+        .page_table = 0,
     };
     // Kasvata lukumäärää.
     used_count += 1;
@@ -284,6 +289,16 @@ pub fn setParentPid(pid: u64, parent: u64) bool {
     return true;
 }
 
+// Aseta prosessin per-process PML4-osoite (vaihe 25).
+pub fn setPageTable(pid: u64, phys: u64) bool {
+    // Hae prosessin indeksi.
+    const idx = findIndex(pid) orelse return false;
+    // Tallenna sivutaulun fyysinen osoite.
+    processes[idx].page_table = phys;
+    // Onnistui.
+    return true;
+}
+
 // Hae zombie-prosessin exit-koodi.
 pub fn exitCode(pid: u64) ?u32 {
     // Hae prosessin indeksi.
@@ -318,5 +333,25 @@ pub fn reapZombie(pid: u64) bool {
     processes[idx].loaded = false;
     // Säilytä zombie-tila ja exit_code wait-vastauksen jälkeen (ei poisteta taulukosta vielä).
     // Tuleva scheduler voi vapauttaa taulukkopaikan kokonaan.
+    return true;
+}
+
+// Vapauta pid — merkitsee prosessipaikan vapaaksi (vaihe 25 virhekäsittely).
+pub fn freePid(pid: u64) bool {
+    // Etsi indeksi.
+    const idx = findIndex(pid) orelse return false;
+    // Merkitse vapaa.
+    processes[idx].used = false;
+    processes[idx].pid = 0;
+    processes[idx].loaded = false;
+    processes[idx].entry = 0;
+    processes[idx].stack_top = 0;
+    processes[idx].stack_slot = 0;
+    processes[idx].state = .running;
+    processes[idx].parent_pid = NO_PARENT;
+    processes[idx].exit_code = 0;
+    processes[idx].page_table = 0;
+    // Alenna lukumäärää.
+    if (used_count > 0) used_count -= 1;
     return true;
 }

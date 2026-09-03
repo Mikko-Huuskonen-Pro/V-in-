@@ -10,6 +10,10 @@ const elf = @import("loader/elf.zig");
 const usermode = @import("arch/x86_64/usermode.zig");
 // Tuo prosessitaulukko — pid-allokaatio ja ladatut kentät.
 const process = @import("process_core");
+// Tuo VMM — per-process page table (vaihe 25).
+const vmm = @import("mm/vmm.zig");
+// Tuo PMM — fyysinen kehyshalooja PML4-raamulle.
+const pmm = @import("mm/pmm.zig");
 
 // Upotettu spawn-lapsi A — build.zig kopioi ennen kernel-käännöstä.
 const spawn_child_a_elf = @embedFile("loader/spawn_child_a_prog.bin");
@@ -60,8 +64,37 @@ pub fn spawnEmbedded(id: u64) ?u64 {
     const pid = process.allocNextPid() orelse return null;
     // Aseta vanhemmaksi nykyinen prosessi (Vaihe 24 parent/child).
     if (!process.setParentPid(pid, process.currentPid())) return null;
-    // Lataa ELF segmentit + pinosivu annettuun slottiin.
-    const loaded = elf.loadElfWithStack(elf_data, stack_slot) orelse return null;
+
+    // === Vaihe 25: per-process PML4-allokaatio ===
+
+    // a) Allokoi nollattu PML4-kehys PMM:stä.
+    const pml4_phys = pmm.frameToPhys(pmm.allocFrame() orelse {
+        _ = process.freePid(pid);
+        return null;
+    });
+
+    // b) Nollaa kehys (tyhjä PML4 — kaikki sivutaulu-indeksit = 0).
+    const pml4_virt = vmm.physToVirt(pml4_phys);
+    const pml4_ptr: [*]u8 = @ptrFromInt(pml4_virt);
+    @memset(pml4_ptr[0..4096], 0);
+
+    // c) Tallenna prosessitaulukkoon.
+    if (!process.setPageTable(pid, pml4_phys)) {
+        _ = process.freePid(pid);
+        return null;
+    }
+
+    // d) Aseta VMM kohde — nyt kaikki kartoitukset kohdistuvat tähän PML4:ään.
+    vmm.target_pml4_phys = pml4_phys;
+
+    // 3. Lataa ELF segmentit kohteen prosessin sivutauluun.
+    const loaded = elf.loadElfWithStack(elf_data, stack_slot) orelse {
+        vmm.target_pml4_phys = null;
+        return null;
+    };
+
+    // 5. Tyhjennä kohde — takaisin kernelin PML4:ään.
+    vmm.target_pml4_phys = null;
     // Tallenna entry/pino prosessitaulukkoon spawn/runProcess varten.
     if (!process.setLoaded(pid, loaded.entry, loaded.stack_top, stack_slot)) return null;
     // Palauta uuden prosessin tunniste.

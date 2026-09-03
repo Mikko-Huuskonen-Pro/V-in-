@@ -9,11 +9,12 @@ const paging = @import("../arch/x86_64/paging.zig");
 // Tuo PMM — fyysisten kehysten allokointi uusille sivutauluille.
 const pmm = @import("pmm.zig");
 
-// HHDM-offset — muunna phys → virt lisäämällä tämä.
-var hhdm_offset: u64 = 0;
-// Aktiivisen PML4-taulun fyysinen osoite (Liminen CR3 bootissa).
-var kernel_pml4_phys: u64 = 0;
-
+// HHDM-offset — muunna phys → virt lisäämällä tämä (alustetaan bootissa).
+pub var hhdm_offset: u64 = undefined;
+// Aktiivisen PML4-taulun fyysinen osoite (Liminen CR3 bootissa, alustetaan bootissa).
+pub var kernel_pml4_phys: u64 = undefined;
+// Vaihe 25 kohde-PML4 per-prosessikartoitusta varten (alustetaan load-ELF-kutsussa).
+pub var target_pml4_phys: ?u64 = undefined;
 // PMM-callback paging.mapPageEnsure:lle — palauttaa uuden kehyksen fyysinen osoite.
 fn allocFramePhys() ?u64 {
     // Allokoi vapaa 4 KiB kehys bitmapista.
@@ -43,8 +44,9 @@ pub fn mapPage(virt: u64, phys: u64, flags: paging.PageFlags) bool {
 // Kartoita virtuaalinen sivu — luo puuttuvat sivutaulut PMM:stä tarvittaessa.
 pub fn mapPageEnsure(virt: u64, phys: u64, flags: paging.PageFlags) bool {
     // Käy sivutaulut läpi ja allokoi puuttuvat tasot PMM:stä.
+    // Vaihe 25: käytä kohde-PML4/per-process taulua jos asetettu.
     const ok = paging.mapPageEnsure(
-        kernel_pml4_phys,
+        pml4Phys(),
         hhdm_offset,
         virt,
         phys,
@@ -74,8 +76,9 @@ pub fn mapNewUserPageEnsure(virt: u64, flags: paging.PageFlags) bool {
     // Muunna kehysindeksi fyysiseksi osoitteeksi.
     const phys = pmm.frameToPhys(frame);
     // Kartoita kehys luoden user-sivutaulut.
+    // Vaihe 25: kartoita kohde-PML4:n päälle (per-process page table).
     const ok = paging.mapUserPageEnsure(
-        kernel_pml4_phys,
+        pml4Phys(),
         hhdm_offset,
         virt,
         phys,
@@ -105,9 +108,12 @@ pub fn hhdm() u64 {
 
 // Palauta aktiivisen PML4:n fyysinen osoite.
 pub fn pml4Phys() u64 {
-    // Palauta bootissa tallennettu CR3/PML4-osoite.
-    return kernel_pml4_phys;
+    // Vaihe 25: palauta kohde-PML4 jos asetettu, muuten kernel-boot.
+    return target_pml4_phys orelse kernel_pml4_phys;
 }
+
+// Kohde-PML4:n asetus/tyhjennys on siirretty spawn.zig:in suoraan kirjoitukseen
+// target_pml4_phys-n läpi — ei enää tarvetta erillisille accessor-funktioille.
 
 // Muunna fyysinen osoite HHDM-virtuaaliosoitteeksi.
 pub fn physToVirt(phys: u64) u64 {
