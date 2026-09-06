@@ -98,44 +98,67 @@ jobs:
       # the GitHub runner indefinitely.
       # ------------------------------------------------------------
 
-      - name: Smoke boot in QEMU
+            - name: Smoke boot in QEMU
         id: smoke
         run: |
           set -o pipefail
 
           echo "=== Starting Zinux smoke boot ==="
-          echo "Timeout: 90 seconds"
-          echo
+          echo "Hard timeout: 60 seconds"
 
-          timeout --foreground -k 10s 90s \
+          (
             zig build run 2>&1 | tee boot-smoke.log
+          ) &
+          PID=$!
 
-          status=${PIPESTATUS[0]}
+          echo "Smoke boot PID: $PID"
 
-          echo
-          echo "=== QEMU exit status: $status ==="
+          for i in $(seq 1 60); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "Smoke boot process exited."
+              wait "$PID"
+              STATUS=$?
 
-          if [ "$status" -eq 124 ]; then
-            echo "::error::Zinux smoke boot timed out after 90 seconds."
-            echo "::error::Kernel/QEMU likely stopped making progress."
+              if [ "$STATUS" -ne 0 ]; then
+                echo "::error::Smoke boot failed with exit code $STATUS"
+                exit "$STATUS"
+              fi
+
+              break
+            fi
+
+            sleep 1
+          done
+
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "::error::Smoke boot timed out after 60 seconds!"
+            echo "::error::Last kernel output:"
+
+            tail -100 boot-smoke.log || true
+
+            echo
+            echo "=== QEMU processes ==="
+            pgrep -a qemu-system-x86_64 || true
+
+            echo
+            echo "=== Killing smoke boot ==="
+            kill -TERM "$PID" 2>/dev/null || true
+            sleep 2
+            kill -KILL "$PID" 2>/dev/null || true
+
             exit 124
-          fi
-
-          if [ "$status" -ne 0 ]; then
-            echo "::error::Zinux smoke boot failed with exit code $status."
-            exit "$status"
           fi
 
           echo
           echo "=== Checking boot markers ==="
 
           grep -q "Zinux boot OK" boot-smoke.log || {
-            echo "::error::Missing 'Zinux boot OK' marker."
+            echo "::error::Missing 'Zinux boot OK' marker"
             exit 1
           }
 
           grep -q "Smoke boot OK" boot-smoke.log || {
-            echo "::error::Missing 'Smoke boot OK' marker."
+            echo "::error::Missing 'Smoke boot OK' marker"
             exit 1
           }
 
