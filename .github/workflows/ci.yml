@@ -140,7 +140,7 @@ jobs:
 
             echo
             echo "=== QEMU processes ==="
-            pgrep -a qemu-system-x86_64 || true
+            pgrep -af qemu-system-x86_64 || true
 
             echo
             echo "=== Killing smoke boot ==="
