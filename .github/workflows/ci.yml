@@ -8,28 +8,255 @@ on:
   pull_request:
     branches: [main]
 
+# Prevent multiple CI runs for the same PR/branch from piling up.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # Never allow a broken QEMU/kernel boot to consume a runner forever.
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: goto-bus-stop/setup-zig@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.16.0
+
       - name: Install ISO/QEMU dependencies
-        run: sudo apt-get update && sudo apt-get install -y xorriso qemu-system-x86
-      - run: zig build test
-      - run: zig build
-      - run: zig build iso
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso qemu-system-x86
+
+      # ------------------------------------------------------------
+      # Host diagnostics
+      # ------------------------------------------------------------
+
+      - name: Show build environment
+        run: |
+          echo "=== CPU ==="
+          nproc
+          lscpu | head -30
+
+          echo
+          echo "=== MEMORY ==="
+          free -h
+
+          echo
+          echo "=== DISK ==="
+          df -h
+
+          echo
+          echo "=== ZIG ==="
+          zig version
+
+          echo
+          echo "=== QEMU ==="
+          qemu-system-x86_64 --version
+
+      # ------------------------------------------------------------
+      # Unit tests
+      # ------------------------------------------------------------
+
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          timeout --foreground -k 10s 5m \
+            zig build test 2>&1 | tee unit-test.log
+
+      # ------------------------------------------------------------
+      # Kernel build
+      # ------------------------------------------------------------
+
+      - name: Build kernel
+        run: |
+          set -o pipefail
+          timeout --foreground -k 10s 5m \
+            zig build 2>&1 | tee build.log
+
+      # ------------------------------------------------------------
+      # ISO
+      # ------------------------------------------------------------
+
+      - name: Build ISO
+        run: |
+          set -o pipefail
+          timeout --foreground -k 10s 5m \
+            zig build iso 2>&1 | tee iso.log
+
+      # ------------------------------------------------------------
+      # Smoke boot
+      #
+      # This is intentionally time-limited.
+      # A kernel that hangs must fail the CI instead of consuming
+      # the GitHub runner indefinitely.
+      # ------------------------------------------------------------
+
       - name: Smoke boot in QEMU
+        id: smoke
         run: |
           set -o pipefail
-          zig build run 2>&1 | tee boot-smoke.log
-          grep -q "Zinux boot OK" boot-smoke.log
-          grep -q "Smoke boot OK" boot-smoke.log
+
+          echo "=== Starting Zinux smoke boot ==="
+          echo "Hard timeout: 60 seconds"
+          echo
+
+          (
+            zig build run 2>&1 | tee boot-smoke.log
+          ) &
+          PID=$!
+
+          echo "Smoke boot PID: $PID"
+
+          for i in $(seq 1 60); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "Smoke boot process exited."
+              wait "$PID"
+              STATUS=$?
+
+              if [ "$STATUS" -ne 0 ]; then
+                echo "::error::Smoke boot failed with exit code $STATUS"
+                exit "$STATUS"
+              fi
+
+              break
+            fi
+
+            sleep 1
+          done
+
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "::error::Smoke boot timed out after 60 seconds!"
+            echo "::error::Last kernel output:"
+
+            tail -100 boot-smoke.log || true
+
+            echo
+            echo "=== QEMU processes ==="
+            pgrep -a qemu-system-x86_64 || true
+
+            echo
+            echo "=== Killing smoke boot ==="
+            kill -TERM "$PID" 2>/dev/null || true
+            sleep 2
+            kill -KILL "$PID" 2>/dev/null || true
+
+            exit 124
+          fi
+
+          echo
+          echo "=== Checking boot markers ==="
+
+          grep -q "Zinux boot OK" boot-smoke.log || {
+            echo "::error::Missing 'Zinux boot OK' marker"
+            exit 1
+          }
+
+          grep -q "Smoke boot OK" boot-smoke.log || {
+            echo "::error::Missing 'Smoke boot OK' marker"
+            exit 1
+          }
+
+          echo "Smoke boot verification OK."
+
+      # ------------------------------------------------------------
+      # Full boot integration tests
+      # ------------------------------------------------------------
+
       - name: Full boot integration tests
+        id: full_boot
         run: |
           set -o pipefail
-          timeout 180s zig build boot-test 2>&1 | tee boot-full.log
-          grep -q "All boot tests OK" boot-full.log
-          grep -q "Full boot OK" boot-full.log
+
+          echo "=== Starting full boot integration tests ==="
+          echo "Timeout: 180 seconds"
+          echo
+
+          timeout --foreground -k 10s 180s \
+            zig build boot-test 2>&1 | tee boot-full.log
+
+          status=${PIPESTATUS[0]}
+
+          echo
+          echo "=== Full boot exit status: $status ==="
+
+          if [ "$status" -eq 124 ]; then
+            echo "::error::Full boot tests timed out after 180 seconds."
+            exit 124
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Full boot tests failed with exit code $status."
+            exit "$status"
+          fi
+
+          grep -q "All boot tests OK" boot-full.log || {
+            echo "::error::Missing 'All boot tests OK' marker."
+            exit 1
+          }
+
+          grep -q "Full boot OK" boot-full.log || {
+            echo "::error::Missing 'Full boot OK' marker."
+            exit 1
+          }
+
+          echo "Full boot verification OK."
+
+      # ------------------------------------------------------------
+      # Always preserve diagnostics.
+      #
+      # This runs even when an earlier step fails or times out.
+      # ------------------------------------------------------------
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          echo "=== CI diagnostics ==="
+
+          echo
+          echo "=== Memory ==="
+          free -h || true
+
+          echo
+          echo "=== Disk ==="
+          df -h || true
+
+          echo
+          echo "=== Running QEMU processes ==="
+          pgrep -a qemu-system-x86_64 || true
+
+          echo
+          echo "=== Process list ==="
+          ps aux --sort=-%cpu | head -20 || true
+
+          echo
+          echo "=== Smoke boot log tail ==="
+          tail -100 boot-smoke.log 2>/dev/null || true
+
+          echo
+          echo "=== Full boot log tail ==="
+          tail -100 boot-full.log 2>/dev/null || true
+
+      # ------------------------------------------------------------
+      # Upload all logs when the job fails.
+      # ------------------------------------------------------------
+
+      - name: Upload CI logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zinux-ci-logs-${{ github.run_id }}
+          path: |
+            unit-test.log
+            build.log
+            iso.log
+            boot-smoke.log
+            boot-full.log
+          if-no-files-found: ignore
+          retention-days: 14
