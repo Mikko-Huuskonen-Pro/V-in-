@@ -167,12 +167,24 @@ pub fn runAll() void {
     // Vaihe 22.3 — userland cross-IPC sender/receiver ring 3:ssa.
     const cross_ipc_userland = @import("cross_ipc_userland.zig");
     cross_ipc_userland.runBootTest();
+    // Phase 27 S2 dedup test.
+    const cross_spawn_s2_test = @import("caps_s2_dedup_test.zig");
+    cross_spawn_s2_test.runS2DedupTest();
+    // Vaihe 27.3 -- userland cross-spawn IPC (parent spawn + transfer).
+    const cross_spawn_userland = @import("cross_spawn_ipc_userland.zig");
+    cross_spawn_userland.runBootTest();
     // Vaihe 23 — cap_create currentPid (S1) + sys_ps prosessitaulukosta.
     const ps_syscall = @import("syscall/ps_syscall.zig");
     ps_syscall.runBootTest();
     // Vaihe 24 — sys_exit + sys_wait spawn-lapsella (exit/wait elinkaari).
     const wait_syscall = @import("syscall/wait_syscall.zig");
     wait_syscall.runBootTest();
+    // Vaihe 28 — memory-capability + sys_mem_map boot-testi.
+    const mem_map_test = @import("syscall/mem_map_syscall.zig");
+    mem_map_test.runBootTest();
+    // Vaihe 25 — per-PID page table isolation test (eri PML4, sama VA).
+    const phase_25 = @import("phase_25_boot_test.zig");
+    phase_25.runBootTest();
     // Kaikki integraatiotestit ajettu.
     log.info("All boot tests OK");
 }

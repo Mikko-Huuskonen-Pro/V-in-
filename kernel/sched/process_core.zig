@@ -289,6 +289,14 @@ pub fn setParentPid(pid: u64, parent: u64) bool {
     return true;
 }
 
+// Hae prosessin per-process PML4-osoite (vaihe 25, palauttaa 0 jos yhteinen).
+pub fn getPageTable(pid: u64) ?u64 {
+    // Hae prosessin indeksi.
+    const idx = findIndex(pid) orelse return null;
+    // Palauta sivutaulun fyysinen osoite.
+    return processes[idx].page_table;
+}
+
 // Aseta prosessin per-process PML4-osoite (vaihe 25).
 pub fn setPageTable(pid: u64, phys: u64) bool {
     // Hae prosessin indeksi.

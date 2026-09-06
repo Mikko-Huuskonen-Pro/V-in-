@@ -36,6 +36,8 @@ const spawn = @import("../spawn.zig");
 const ps_core = @import("ps_syscall_core.zig");
 // Tuo wait-ydin — sys_wait parent/child-tarkistus (Vaihe 24).
 const wait_core = @import("wait_syscall_core.zig");
+// Tuo sys_mem_map syscall-ydin — CapType.memory + mapPageEnsure (Vaihe 28).
+const mem_map_core = @import("mem_map_core.zig");
 
 // Syscall-käsittelijän funktiotyyppi (6 argumenttia, i64 paluu).
 const SyscallFn = *const fn (u64, u64, u64, u64, u64, u64) i64;
@@ -599,6 +601,12 @@ fn sysPs(a1: u64, a2: u64, _: u64, _: u64, _: u64, _: u64) i64 {
     return copyToUser(user, user_len, kbuf[0..klen], klen);
 }
 
+// sys_mem_map — Capability memory + mapPageEnsure (Vaihe 28).
+pub fn sysMemMap(a1: u64, a2: u64, _: u64, _: u64, _: u64, _: u64) i64 {
+    // Kutsu mem_map_core.doMemMap(slot_idx, virt_addr).
+    return mem_map_core.doMemMap(@intCast(a1), @intCast(a2));
+}
+
 // Dispatch-taulukko — indeksi = syscall-numero (max 31).
 const handlers: [32]?SyscallFn = blk: {
     // Alusta kaikki merkinnät tyhjiksi.
@@ -647,6 +655,8 @@ const handlers: [32]?SyscallFn = blk: {
     table[@intCast(abi.SYS_meminfo)] = sysMeminfo;
     // Rekisteröi sys_ps (shell ps-komento).
     table[@intCast(abi.SYS_ps)] = sysPs;
+    // Rekisteröi sys_mem_map (memory-capability + mapPageEnsure, Vaihe 28).
+    table[@intCast(abi.SYS_mem_map)] = sysMemMap;
     // Palauta valmis taulukko.
     break :blk table;
 };

@@ -26,7 +26,7 @@ const spawn_child_exit_elf = @embedFile("loader/spawn_child_exit_prog.bin");
 pub const SPAWN_ID_CHILD_A: u64 = 0;
 // Embedded ELF -tunniste: spawn-lapsi B.
 pub const SPAWN_ID_CHILD_B: u64 = 1;
-// Embedded ELF -tunniste: spawn-lapsi exit (sys_exit).
+// Embedded ELF -tunniste: exit (sys_exit).
 pub const SPAWN_ID_EXIT: u64 = 2;
 
 // Pinon heap-slot lapsi A:lle — erillään muista user-ELF:istä (slot 112).

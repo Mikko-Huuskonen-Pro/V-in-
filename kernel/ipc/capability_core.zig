@@ -313,7 +313,16 @@ pub fn transferSlotToPid(src_slot: u32, dest_pid: u64, new_rights: Rights) ?u32 
     if (!rightsSubset(src.rights, new_rights)) return null;
     // Kohdeprosessi pitää olla rekisteröity taulukossa.
     if (process.findIndex(dest_pid) == null) return null;
-    // Asenna sama objekti kohdeprosessin slottiin annetuilla oikeuksilla.
+    // Dedup: tarkista onko kohdeprosessilla jo slotti tähän objektiin (S2-bounded).
+    const dest_proc_idx = process.findIndex(dest_pid) orelse return null;
+    var si: usize = 0;
+    while (si < slot_counts[dest_proc_idx]) : (si += 1) {
+        if (slots[dest_proc_idx][si].object_id == src.object_id) {
+            // Olemassa oleva slotti — palauta se dedupeeraamalla.
+            return @intCast(si);
+        }
+    }
+    // Asenna uusi slotti kohdeprosessin slottiin annetuilla oikeuksilla (ei duplicates).
     const derived = installSlotForPid(dest_pid, src.object_id, new_rights) orelse return null;
     // Hae objekti audit-merkintää varten.
     const obj = getObject(src.object_id) orelse return derived;

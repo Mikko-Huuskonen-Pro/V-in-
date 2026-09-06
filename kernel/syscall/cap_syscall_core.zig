@@ -28,11 +28,13 @@ pub const MASK_ALL: u32 = MASK_READ | MASK_WRITE | MASK_SEND | MASK_RECV | MASK_
 
 // Capability-tyyppi: IPC-portti (sys_cap_create arg1).
 pub const CAP_TYPE_PORT: u32 = 1;
+// Capability-tyyppi: muisti (sys_cap_create arg1, Vaihe 28).
+pub const CAP_TYPE_MEMORY: u32 = 5;
 
-// Onko sys_cap_create -tyyppi tuettu?
+// Onko sys_cap_create -tyyppi tuettu (Vaihe 28: +memory).
 pub fn typeValid(typ: u32) bool {
-    // Vain portti-tyyppi toistaiseksi.
-    return typ == CAP_TYPE_PORT;
+    // Portti ja muisti-tyypit tuettu.
+    return typ == CAP_TYPE_PORT or typ == CAP_TYPE_MEMORY;
 }
 
 // Rights packed struct — sama layout kuin capability_core.Rights.

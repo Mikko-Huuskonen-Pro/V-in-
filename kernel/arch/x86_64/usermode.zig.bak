@@ -49,8 +49,6 @@ pub export var usermode_saved_kernel_rsp: u64 = 0;
 var usermode_saved_pid: u64 = process.BOOT_PID;
 // Ring 3:ssa suoritettava prosessi — varmuus currentPid:lle syscallien aikana (Vaihe 24).
 pub var usermode_ring3_pid: u64 = process.BOOT_PID;
-// Vaihe 26: tallenna kernel CR3 ennen iretq, palautetaan usermodeReturnToKernel:ssa.
-pub export var saved_kernel_cr3: u64 = 0;
 
 // Siirry ring 3:een — usermode_jump.S iretq (palaa ret:llä sys_test_return:in kautta).
 extern fn usermodeEnterIret(
@@ -59,7 +57,6 @@ extern fn usermodeEnterIret(
     user_cs: u64,
     user_ss: u64,
     rflags: u64,
-    cr3: u64,
 ) callconv(.c) void;
 
 // Palaa kernel boot-testiin — usermode_jump.S ret.
@@ -119,10 +116,8 @@ pub fn enterUserAs(entry: u64, user_stack_top: u64, pid: u64) void {
     const user_ss: u64 = gdt.USER_DATA_SEL | 3;
     // RFLAGS: bitti 1 pakollinen, IF=0.
     const rflags: u64 = 0x2;
-    // Vaihe 26: tallenna kernel CR3 ennen iretq (palautetaan usermodeReturnToKernel).
-    saved_kernel_cr3 = vmm.kernel_pml4_phys;
-    // Siirry ring 3:een -- iretq + kohde PML4 cr3 (Vaihe 26 per-prosessi isolatio).
-    usermodeEnterIret(entry, user_stack_top, user_cs, user_ss, rflags, vmm.kernel_pml4_phys);
+    // Siirry ring 3:een — palaa ret:llä sys_test_return:in kautta.
+    usermodeEnterIret(entry, user_stack_top, user_cs, user_ss, rflags);
 }
 
 // Boot-testi — ring 3 sys_write("hello") + paluu kerneliin.

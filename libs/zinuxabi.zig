@@ -46,6 +46,8 @@ pub const SYS_spawn: u64 = 20;
 pub const SYS_cap_transfer: u64 = 21;
 // Syscall-numero: sys_wait(child_pid) → exit-koodi tai neg. virhe (Vaihe 24).
 pub const SYS_wait: u64 = 22;
+// Syscall-numero: sys_mem_map(slot, addr, flags) → kirjoitettu määrä veya neg. virhe (Vaihe 28).
+pub const SYS_mem_map: u64 = 23;
 // Syscall-numero: sys_test_return — palaa kernel boot-testiin (vain kehitys).
 pub const SYS_test_return: u64 = 10;
 
@@ -57,3 +59,4 @@ pub const EAGAIN: i64 = -11;
 pub const EINVAL: i64 = -22;
 pub const EBADF: i64 = -9;
 pub const ENOSYS: i64 = -38;
+pub const ENOMEM: i64 = -12;

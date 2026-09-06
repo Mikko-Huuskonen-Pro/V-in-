@@ -585,6 +585,57 @@ pub fn build(b: *std.Build) void {
     copy_cross_ipc_test_elf.addFileArg(embedded_cross_ipc_test_path);
     copy_cross_ipc_test_elf.step.dependOn(&cross_ipc_test_exe.step);
 
+    // --- Cross-spawn IPC userland test ELF (Vaihe 27) — upotetaan kerneliin ---
+    const cross_spawn_mod = b.createModule(.{
+        .root_source_file = b.path("userland/cross_spawn_ipc_test/main.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    cross_spawn_mod.red_zone = false;
+    cross_spawn_mod.stack_protector = false;
+    cross_spawn_mod.single_threaded = true;
+    cross_spawn_mod.code_model = .large;
+    cross_spawn_mod.addImport("cap_core", cap_core_user_mod);
+    cross_spawn_mod.addImport("ipc_core", ipc_core_user_mod);
+
+    const cross_spawn_exe = b.addExecutable(.{
+        .name = "zinux-cross-spawn-test",
+        .root_module = cross_spawn_mod,
+    });
+    cross_spawn_exe.setLinkerScript(b.path("userland/cross_spawn_ipc_test/user.ld"));
+    cross_spawn_exe.root_module.addAssemblyFile(b.path("userland/cross_spawn_ipc_test/start.S"));
+    b.installArtifact(cross_spawn_exe);
+
+    const embedded_cross_spawn_path = b.path("kernel/loader/cross_spawn_test_prog.bin");
+    const copy_cross_spawn_elf = b.addSystemCommand(&.{ "cp", "-f" });
+    copy_cross_spawn_elf.addFileArg(cross_spawn_exe.getEmittedBin());
+    copy_cross_spawn_elf.addFileArg(embedded_cross_spawn_path);
+    copy_cross_spawn_elf.step.dependOn(&cross_spawn_exe.step);
+
+    // --- Mem map userland test ELF (Vaihe 28) — upotetaan kerneliin ---
+    const mem_map_test_mod = b.createModule(.{
+        .root_source_file = b.path("userland/mem_map_test/main.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    mem_map_test_mod.red_zone = false;
+    mem_map_test_mod.stack_protector = false;
+    mem_map_test_mod.single_threaded = true;
+    mem_map_test_mod.code_model = .large;
+    const mem_map_test_exe = b.addExecutable(.{
+        .name = "zinux-mem-map-test",
+        .root_module = mem_map_test_mod,
+    });
+    mem_map_test_exe.setLinkerScript(b.path("userland/mem_map_test/user.ld"));
+    mem_map_test_exe.root_module.addAssemblyFile(b.path("userland/mem_map_test/start.S"));
+    b.installArtifact(mem_map_test_exe);
+
+    const embedded_mem_map_test_path = b.path("kernel/loader/mem_map_test_prog.bin");
+    const copy_mem_map_test_elf = b.addSystemCommand(&.{ "cp", "-f" });
+    copy_mem_map_test_elf.addFileArg(mem_map_test_exe.getEmittedBin());
+    copy_mem_map_test_elf.addFileArg(embedded_mem_map_test_path);
+    copy_mem_map_test_elf.step.dependOn(&mem_map_test_exe.step);
+
     const kernel = b.addExecutable(.{
         .name = "zinux-kernel",
         .root_module = kernel_mod,
@@ -615,7 +666,9 @@ pub fn build(b: *std.Build) void {
     kernel.step.dependOn(&copy_spawn_child_a_elf.step);
     kernel.step.dependOn(&copy_spawn_child_b_elf.step);
     kernel.step.dependOn(&copy_spawn_child_exit_elf.step);
+    kernel.step.dependOn(&copy_cross_spawn_elf.step);
     kernel.step.dependOn(&copy_cross_ipc_test_elf.step);
+    kernel.step.dependOn(&copy_mem_map_test_elf.step);
     b.installArtifact(kernel);
 
     // --- Host-testit ---
@@ -810,14 +863,13 @@ pub fn build(b: *std.Build) void {
     mk_iso_root.step.dependOn(&fetch_limine.step);
 
     const xorriso = b.addSystemCommand(&.{
-        "xorriso", "-as", "mkisofs",
-        "-R", "-r", "-J",
-        "-b", "boot/limine/limine-bios-cd.bin",
-        "-no-emul-boot", "-boot-load-size", "4", "-boot-info-table",
-        "-hfsplus", "-apm-block-size", "2048",
-        "--efi-boot", "boot/limine/limine-uefi-cd.bin",
-        "-efi-boot-part", "--efi-boot-image", "--protective-msdos-label",
-        "-o",
+        "xorriso",          "-as",                            "mkisofs",
+        "-R",               "-r",                             "-J",
+        "-b",               "boot/limine/limine-bios-cd.bin", "-no-emul-boot",
+        "-boot-load-size",  "4",                              "-boot-info-table",
+        "-hfsplus",         "-apm-block-size",                "2048",
+        "--efi-boot",       "boot/limine/limine-uefi-cd.bin", "-efi-boot-part",
+        "--efi-boot-image", "--protective-msdos-label",       "-o",
     });
     xorriso.addFileArg(b.path(iso_path_rel));
     xorriso.addDirectoryArg(b.path(iso_root_rel));
