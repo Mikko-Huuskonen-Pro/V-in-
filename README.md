@@ -78,7 +78,6 @@ The kernel then decides which capabilities can actually be granted.
 The AI may request a capability, but it cannot grant one to itself.
 
 ---
-
 ## Standing on Linux's shoulders
 
 Väinö would not exist in its current form without the extraordinary engineering effort behind Linux and its ecosystem.
