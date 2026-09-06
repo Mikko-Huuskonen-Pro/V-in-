@@ -1,4 +1,4 @@
-# Zinux — Development Roadmap
+# Väinö — Development Roadmap
 
 > Step-by-step plan from scratch to a bootable hybrid microkernel operating system.
 > Each phase produces a **testable artifact** (QEMU boot + serial output).
