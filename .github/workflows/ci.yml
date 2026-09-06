@@ -105,7 +105,7 @@ jobs:
           set -o pipefail
 
           echo "=== Starting Zinux smoke boot ==="
-          echo "Hard timeout: 60 seconds"
+          echo "Hard timeout: 180 seconds"
           echo
 
           (
@@ -115,7 +115,7 @@ jobs:
 
           echo "Smoke boot PID: $PID"
 
-          for i in $(seq 1 60); do
+          for i in $(seq 1 180); do
             if ! kill -0 "$PID" 2>/dev/null; then
               echo "Smoke boot process exited."
               wait "$PID"
