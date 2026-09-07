@@ -133,7 +133,7 @@ jobs:
           done
 
           if kill -0 "$PID" 2>/dev/null; then
-            echo "::error::Smoke boot timed out after 60 seconds!"
+            echo "::error::Smoke boot timed out after 180 seconds!"
             echo "::error::Last kernel output:"
 
             tail -100 boot-smoke.log || true
@@ -230,7 +230,7 @@ jobs:
 
           echo
           echo "=== Running QEMU processes ==="
-          pgrep -a qemu-system-x86_64 || true
+          pgrep -af qemu-system-x86_64 || true
 
           echo
           echo "=== Process list ==="
