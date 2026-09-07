@@ -110,16 +110,6 @@ fn kmain() noreturn {
     vmm.init(boot_info.hhdm_offset);
     // Vahvista VMM-alustus onnistui.
     log.info("VMM initialized");
-    // DEBUG: isolate post-VMM initialization hang.
-    log.info("DEBUG: Calling kaslr.init()...");
-    kaslr.init(boot_info.hhdm_offset);
-
-    info("DEBUG: kaslr.init() done, calling heap.init()...");
-    heap.init();
-
-    log.info("DEBUG: heap.init() done, running boot test...");
-    kaslr.runBootTest();
-    log.info("Heap initialized");
     // Laske KASLR-slide ennen heap/user-kartoitusta (Vaihe 7.3).
     kaslr.init(boot_info.hhdm_offset);
     // Alusta kernel heap — kartoittaa INITIAL_PAGES sivua slidattuun alkuun.
