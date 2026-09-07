@@ -1,109 +1,32 @@
  ────────────────────────────────────────────────────────────────────────────────
-@docs/ROADMAP_EN.md
- Phase 25 Inspection Summary
+Ongelman ydin: flushTlb ja puuttuva CR3-päivitysKun uusi sivu kartoitetaan mapPageEnsureWithTables-funktiossa, x86_64-arkkitehtuurissa ei riitä, että uusi merkintä kirjoitetaan sivutauluun. Prosessorin sisäinen TLB-välimuisti (Translation Lookaside Buffer) täytyy tyhjentää tai sille täytyy kertoa, että sivutaulujen rakenne muuttui.Tiedostossasi on kaksi ongelmaa, jotka yhdessä jumiuttavat suorituksen:1. flushTlb ei kerro prosessorille muistin muuttumisesta ("memory" clobber puuttuu)Tiedoston lopussa oleva inline-assembly näyttää tältä:
 
- ### ❌ Task 25.1 — Process.page_table + CR3 switch (process_core.zig, vmm.zig)
-
- Status: NOT implemented.
-
- - Process struct (process_core.zig) has no page_table field. It stores: used, pid, loaded, entry, stack_top,
-   stack_slot, state, parent_pid, exit_code. Nothing for a per-process page table.
- - vmm.zig has a single global kernel_pml4_phys — the kernel's own PML4 from Limine's CR3 at boot. All VMM functions
-   (mapPage, mapPageEnsure, mapNewUserPageEnsure) always operate on this one table.
- - Preliminaries DO exist in paging.zig:
-     - setCr3(pml4_phys) — can switch CR3 at any time
-     - mapPageEnsure(pml4_phys, ...) and mapUserPageEnsure(pml4_phys, ...) already accept a pml4_phys parameter, so the
-       plumbing to map into arbitrary page tables is already there
-
- ### ❌ Task 25.2 — ELF-loader into per-process table (loader/elf.zig, spawn.zig)
-
- Status: NOT implemented.
-
- - loader/elf.zig::mapUserPage() (line 49) calls paging.getPteRaw(vmm.pml4Phys(), ...) — always the kernel's table.
- - loader/elf.zig::loadElfWithStack() never knows about or passes a process-specific page table. It maps ELF segments
-   and stack at fixed user VA (HEAP_START + slot * PAGE_SIZE) into the global kernel address space.
- - spawn.zig::spawnEmbedded() calls elf.loadElfWithStack(...) → same global table, then calls process.setLoaded(pid,
-   ...). No page table created or stored.
- - All mappings for both ELF A and ELF B land in the same table. If two processes load at the same VA, they share
-   physical pages — zero isolation.
-
- ### ❌ Task 25.3 — Boot test: two ELFs at same VA, different processes
-
- Status: NOT implemented.
- - No boot test messages for Page table per pid OK or Address space OK anywhere in the codebase (grep confirmed zero
-   matches).
- - The current kernel maps everything into one shared address space; there's nothing to verify.
-
- ────────────────────────────────────────────────────────────────────────────────
-
- ### What needs to happen to complete Phase 25
-
- ┌──────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
- │ Step │ What                                                                                                        │
- ├──────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
- │ a    │ Add page_table: u64 (physical PML4 address) to Process in process_core.zig; add fn allocNewPageTable() ?u64 │
- │      │  using PMM + PM4 zeroing                                                                                    │
- ├──────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
- │ b    │ In spawnEmbedded() (or later in a new createProcessPageTable()), allocate a fresh PML4 frame, copy the      │
- │      │ kernel's base maps (HHDM etc.), store it on the Process struct                                              │
- ├──────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
- │ c    │ Thread the page table through elf.loadElfWithStack — accept a pml4_phys parameter instead of always using   │
- │      │ vmm.pml4Phys()                                                                                              │
- ├──────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
- │ d    │ In runProcess(), call paging.setCr3(proc.page_table) before enterUserAs() to switch address spaces          │
- ├──────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
- │ e    │ Add boot test: two processes map same VA → write different values → verify isolation by reading from the    │
- │      │ other process's table                                                                                       │
- └──────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-
- The infrastructure (setCr3, parameterized mapPageEnsure) is ready — no work there. But no per-process page tables are
- created or used at all yet.
+pub fn flushTlb( virt: u64) void {
+    asm volatile ("invlpg (%[addr])"
+        :
+        : [ addr] "r" ( virt),
+    ); // <-- TÄSTÄ PUUTTUU KLASSISESTI : "memory"
+}
 
 
- Let me check what happens when I try to just look at the steps. But actually, the issue is that even a basic zig build triggers limine's bash script which
- needs cc. Let me see if there's a way to skip that.
+Koska assembly-koodissa ei ole kerrottu kääntäjälle, että tämä käsky muuttaa muistin tilaa (: "memory"), Zig-kääntäjä saattaa optimoida sen ympärillä olevia muistihakuja tai siirtoja aggressiivisesti väärin. Prosessori ei välttämättä tajua uuden heap-sivun tulleen voimaan, vaan yrittää suorittaa seuraavaa käskyä vanhoilla (olemattomilla) välimuistitiedoilla.2. Uusien väli-sivutaulujen luominen vaatii koko CR3-rekisterin resetoinninKun heap alustetaan KASLR:n arpomaan uuteen osoitteeseen, koodi joutuu luomaan kokonaan uusia sivutauluja (PML4e, PDPTe, PDe).x86_64-prosessoreissa pelkkä yksittäisen sivun invlpg-käsky ei riitä, jos ylätason hakemistorakennetta (kuten PML4 tai PDPT) on muutettu. Jos prosessori on ehtinyt tallentaa välimuistiinsa tiedon, että kyseistä PML4-indeksiä ei ole olemassa, se ei lue uutta taulua ennen kuin CR3-rekisteri ladataan uudelleen (mikä tyhjentää koko sivuvälimuistin).Tämän vuoksi koodi luulee kartoittaneensa sivun, mutta prosessori ei näe sitä, jolloin heap.init():n @memset-nollausyritys heittää Page Faultin, joka lukitsee koneen ikuiseen looppiin.Miten korjaat tämän?Sinun tarvitsee muuttaa vain kaksi pientä kohtaa vmm.zig-tiedostossa! Silloin sivuvälimuisti tyhjentyy oikein aina, kun uusia tauluja luodaan.Mene puhelimella tai tietokoneella muokkaamaan kernel/mm/vmm.zig-tiedostoa ja tee nämä kaksi korjausta:Korjaus 1: Päivitä mapPageEnsureEtsi vmm.zig-tiedostosta funktio mapPageEnsure ja muuta se lataamaan CR3-rekisteri uudelleen onnistuneen kartoituksen jälkeen:
 
- Actually, looking back at the build summary: "64/69 steps succeeded (1 failed)" — so 64 steps passed! The failure is only in the limine download/linking
- step. Let me check what that 64th step compiled successfully — this means my page_table field change compiles fine. Let me also try running unit tests:
+pub fn mapPageEnsure(virt: u64, phys: u64, flags: paging.PageFlags) bool {
+    const ok = paging.mapPageEnsure(
+        pml4Phys(),
+        hhdm_offset,
+        virt,
+        phys,
+        flags,
+        allocFramePhys,
+    );
+    // Jos uusi sivu (ja mahdolliset taulut) luotiin, 
+    // ladataan CR3 uudelleen, jotta CPU näkee uudet hakemistorakenteet.
+    if (ok) paging.setCr3(paging.getCr3());
+    return ok;
+}
+
+Korjaus 2: Päivitä mapNewPageEnsureVarmista, että myös heap.init():n käyttämä mapNewPageEnsure kutsuu tätä korjattua versiota (nykyisessä koodissasi se tekee jo niin, mutta varmista että se palauttaa mapPageEnsure:n tuloksen suoraan).Kun teet tämän muutoksen vmm.zig-tiedostoon, se pakottaa QEMU-prosessorin päivittämään muistikarttansa heti, kun kernel heapin ensimmäiset 4 sivua luodaan, ja jumiutuminen pitäisi laueta.Kokeile tehdä tämä pieni muutos suoraan vmm.zig-tiedostoon GitHubissa ja katso, herääkö Zinux eloon!
 
 
- $ zig build test 2>&1 | tail -30 (timeout 60s)
 
- (no output)
-
- Took 10.9s
-
-
- Tests passed (no output = success for zig build test). And the zig build (with iso step) had 64/69 steps succeed — only failing at the cc-dependent limine
- download. My change is structurally correct:
-
- 1. ✅ Process struct gains page_table: u64 field
- 2. ✅ All four initialization sites set it to zero (initCore loop, allocProcess BOOT branch, allocProcess new process branch)
- 3. ✅ Kernel compiles (64/69 steps) — failure is in the limine C compiler step, not Zig code
- 4. ✅ Unit tests pass
-
- The file is clean and ready for step (b). Let me report back.
-
- Step (a) complete. Here's what changed:
-
- ### Edit to kernel/sched/process_core.zig
-
- 1. Added field to Process struct (exit_code → new page_table):
-    ```zig
-      page_table: u64,  // Per-process PML4 physical address (0 = none yet)
-    ```
-
- 2. Initialized page_table = 0 in three sites:
-     - initCore() for-loop (zero every slot)
-     - allocProcess() BOOT_PID branch (processes[0] = {...})
-     - allocProcess() new-process branch (processes[used_count] = {...})
-
- ### Verification
-
- - zig format: no issues
- - zig build test → passed (no output)
- - zig build → 64/69 steps succeeded; the single failure is the external bash step fetching limine, which requires a C compiler (cc) — not available on
-   this Windows host. All Zig compilation completed cleanly.
-
- The Process struct now carries a page_table: u64 field (zero-initialized). Step (b) will use this field to store the physical address of a newly allocated
- per-process PML4 frame.
