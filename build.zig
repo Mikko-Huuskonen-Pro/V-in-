@@ -908,7 +908,7 @@ pub fn build(b: *std.Build) void {
         \\set -o pipefail
         \\qemu-system-x86_64 \
         \\  -M q35 \
-        \\  -cpu qemu64,+smep,+smap \
+        \\  -cpu qemu64 \
         \\  -m 512M \
         \\  -display none \
         \\  -monitor none \
