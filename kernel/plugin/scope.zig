@@ -159,3 +159,31 @@ pub fn isIsolated(page_table_phys: u64) bool {
     // Nolla tarkoittaa jaettua kernel-taulua — ei eristystä.
     return page_table_phys != 0;
 }
+
+// Saako gateway siirtää capabilityn pluginista toiseen (Vaihe 31).
+//
+// Portinvartija-päätös puhtain arvoin (host-testattava): kernel kerää faktat
+// (rekisteri + slotit + scope) ja kutsuu tätä ennen yhtäkään kirjoitusta.
+// AGENTS.md: siirto on pyyntö, kernel päättää — yksikään ehto ei luota
+// pluginin sanaan, kaikki tarkistetaan kernel-tilasta.
+pub fn allowsGatewayTransfer(
+    dest: Scope,
+    abi_type: u32,
+    rights_mask: u32,
+    dest_owned: u32,
+    src_grant: bool,
+    rights_subset: bool,
+    parties_ok: bool,
+) bool {
+    // Molempien osapuolten pitää olla rekisteröityjä plugineja JA kutsujan
+    // pitää olla boot/init tai lähde itse (init-pid-juuri, ks. ns_map.zig).
+    if (!parties_ok) return false;
+    // Lähdeslotissa pitää olla grant — muuten siirto-oikeutta ei ole.
+    if (!src_grant) return false;
+    // Pyydetyt oikeudet ⊆ lähteen oikeudet — ei eskalaatiota matkalla.
+    if (!rights_subset) return false;
+    // Kohde-scopen luontiraja: tyyppi + oikeudet + määräraja juoksevalla määrällä.
+    if (!allowsCreate(dest, abi_type, rights_mask, dest_owned)) return false;
+    // Kaikki portinvartija-ehdot täyttyvät.
+    return true;
+}

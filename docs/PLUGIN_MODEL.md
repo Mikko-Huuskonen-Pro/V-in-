@@ -107,8 +107,8 @@ against the scope. Phase 30 will call `validate` then `fitsScope` then
 
 ## 5. What Phase 29 does NOT do
 
-- No `sys_plugin_load/unload` (Phase 30).
-- No cross-plugin IPC gateway (Phase 31).
+- No `sys_plugin_load/unload` (Phase 30 — since landed).
+- Cross-plugin IPC gateway landed in Phase 31 (`kernel/plugin/ns_map.zig`).
 - No snapshots/restore (Phase 31.5).
 - No signing/registry (Phase 32).
 - IRQ/endpoint caps are defined as bits but rejected by the manifest until

@@ -319,6 +319,18 @@ pub fn lookupSlot(slot_idx: u32) ?CapRef {
     return lookupSlotForPid(process.currentPid(), slot_idx);
 }
 
+// Montako capability-slottia prosessi omistaa — gateway-katon tarkistukseen (Vaihe 31).
+pub fn slotCountForPid(pid: u64) usize {
+    // Vaadi alustus.
+    if (!initialized) return 0;
+    // Hae prosessin taulukkoindeksi.
+    const proc_idx = process.findIndex(pid) orelse return 0;
+    // Indeksi aina rajoissa (findIndex rajaa used_count:iin).
+    if (proc_idx >= slot_counts.len) return 0;
+    // Palauta käytössä olevien slottien määrä.
+    return slot_counts[proc_idx];
+}
+
 // Hae capability-slotin objektityyppi — null jos slotti mitätöity.
 pub fn getSlotType(slot_idx: u32) ?CapType {
     // Hae slotti indeksillä.

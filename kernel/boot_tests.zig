@@ -194,6 +194,9 @@ pub fn runAll() void {
     // Vaihe 30 — sys_plugin_unload (oikeus + purku + resurssit).
     const plugin_unload = @import("syscall/plugin_unload_syscall.zig");
     plugin_unload.runBootTest();
+    // Vaihe 31 — plugin IPC gateway (caps-lista + syscall-siirto pluginista toiseen).
+    const plugin_transfer = @import("syscall/plugin_transfer_syscall.zig");
+    plugin_transfer.runBootTest();
     // Kaikki integraatiotestit ajettu.
     log.info("All boot tests OK");
 }

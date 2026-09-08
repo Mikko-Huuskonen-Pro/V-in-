@@ -574,7 +574,7 @@ zig build boot-test
 |-------|-------|------|
 | **29** | Plugin sandboxing model | Capability-bound, per-plugin address space isolation | ✅ |
 | **30** | `sys_plugin_load / unload` | Load/unload user-space plugin binaries at runtime | ✅ |
-| **31** | Plugin IPC framework | Cross-namespace capability transfer for the plugin ecosystem |
+| **31** | Plugin IPC framework | Cross-namespace capability transfer for the plugin ecosystem | ✅ |
 | **31.5** | Plugin snapshots & restore | Checkpoint/restore entire plugin state (memory, caps, regs) |
 | **32** | Plugin ecosystem & untrusted distribution | Signing, registry, community audit, `zig build plugin-install` |
 | **33** | Self-healing ("Everything is replaceable") | Auto-diagnosis, patch generation, hot-swap validated plugins |
@@ -672,16 +672,36 @@ zig build boot-test
 - `zig build` (freestanding kernel incl. plugin ELF + new boot tests) → passed.
 - QEMU `boot-test` serial (`plg`, `Plugin load OK`, `Plugin unload OK`) → pending CI (no QEMU/xorriso on dev machine).
 
-#### Phase 31 — Plugin IPC Framework
+#### Phase 31 — Plugin IPC Framework ✅
 
 > **Goal**: Cross-namespace capability transfer through a gateway mechanism rooted in init.pid scope.
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| 31.1 | Namespace mapping: plugin A → plugin B capabilities | `kernel/plugin/ns_map.zig` | ⬜ |
-| 31.2 | Manifest `cap:[]` enforcement at load-time | `kernel/plugin/manifest.zig` (validator) | ⬜ |
+| 31.1 | Namespace mapping: plugin A → plugin B capabilities | `kernel/plugin/ns_map.zig` | ✅ `gatewayTransfer` + `Plugin IPC gateway OK` boot test |
+| 31.2 | Manifest `cap:[]` enforcement at load-time | `kernel/plugin/manifest.zig` (validator) | ✅ `enforceCapsAtLoad` + `Plugin manifest caps OK` boot test |
+| 31.3 | `sys_plugin_transfer` syscall (gateway ABI) | `dispatch.zig`, `libs/zinuxabi.zig` (`SYS_plugin_transfer=26`) | ✅ thin handler → EPERM on closed gate; positive path via syscall as source |
+| 31.4 | Ring-3 wrapper + transfer test ELF | `userland/lib/plugin_transfer.zig`, `userland/plugin_xfer_test/` | ✅ `transfer()` + `pxfer OK` from ring 3 (R10 4th-arg ABI proven) |
 
 **Dependency**: Phase 29 (sandbox scope), Phases 22+30 (transfer + plugin infra).
+
+**Test**:
+```bash
+zig build test
+# scope + manifest host tests OK (incl. gateway + caps-list vectors)
+zig build boot-test
+# Expected serial: Plugin manifest caps OK, Plugin gateway transfer OK,
+# Plugin gateway message OK, Plugin IPC gateway OK, All boot tests OK
+```
+
+**Implementation summary:**
+- **Gateway** (`kernel/plugin/ns_map.zig`): `gatewayTransfer(src_pid, src_slot, dest_pid, rights_mask)` mediates plugin→plugin transfer. Both endpoints must be registered plugins; caller must be boot/init or the source itself (init-pid root — a stranger cannot move others' caps). Kernel gathers facts (grant bit, rights subset, dest scope, dest cap count) and calls the pure `scope.allowsGatewayTransfer` predicate before any write; installation reuses `transferSlotToPid` in the source context (grant/subset re-check + S2 dedup + audit). Direct plugin→plugin transfer without the scope gate was rejected (would violate I3).
+- **Policy core** (`kernel/plugin/scope.zig`, dependency-free, host-testable): `allowsGatewayTransfer(dest, abi_type, rights_mask, dest_owned, src_grant, rights_subset, parties_ok)` — parties + grant + subset + `allowsCreate` (type/rights/ceiling).
+- **Caps-list enforcement** (`kernel/plugin/manifest.zig`): `enforceCapsAtLoad(sc, caps, owned_start)` validates each CapReq structurally and against the scope with a running ownership count; `checkScope` is refactored onto it (fail-closed behavior preserved). Shared by the single-cap register path and future multi-cap manifests (Phase 32).
+- **Accessors**: `capability_core.slotCountForPid` (destination ceiling), `loader.pluginScope` (destination scope).
+- **Boot test** (`kernel/syscall/plugin_transfer_syscall.zig::runBootTest`, registered after plugin unload): 2-cap manifest admit/ceiling/grant-escalation checks; two plugins with different scopes (A with grant, B without); ghost-pid, stranger-caller (via syscall → EPERM), and grant-escalation negatives; `P31` message A→B with the transfer itself issued as `sys_plugin_transfer` by the source plugin; both plugins run in ring 3; LIFO unload restores the table.
+- **Syscall** (`SYS_plugin_transfer=26`, RAX=26 RDI=src_pid RSI=src_slot RDX=dest_pid R10=rights_mask — 4. argumentti R10:ssä, CPU ylikirjoittaa RCX:n): thin `dispatch.zig` wrapper around `gatewayTransfer` — closed gate → EPERM. Register values narrow with `@truncate` (not `@intCast`): a ring-3 caller controls the registers, and truncation fails closed through the gateway instead of trapping the kernel. `ns_map.zig` stays import-clean (`dispatch → ns_map`, no cycle); the boot test lives in the syscall file per Phase-30 convention.
+- **Ring-3 wrapper** (`userland/lib/plugin_transfer.zig`, `userland/plugin_xfer_test/` @ `0xFFFFFFFF90092000`, stack slot 117, `.capboot` params @ `0xFFFFFFFF90093000`, embed → `kernel/loader/plugin_xfer_test_prog.bin`): `transfer()` + `TransferError`, 4th arg in R10. Boot test loads the ELF into plugin A's address space (target-PML4 + HHDM-aliased boot-info, Phase-28 pattern), runs it as A — `pxfer OK` from ring 3 proves the R10 path; the follow-up invoke then dedups to the same slot and the `P31` message proves the transferred cap works.
 
 #### Phase 31.5 — Plugin Snapshots & Restore ⬛ Heavy
 

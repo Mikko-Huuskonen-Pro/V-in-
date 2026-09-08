@@ -58,18 +58,33 @@ pub fn checkManifest(m: Manifest) ManifestError!void {
     try umanifest.validate(m);
 }
 
+// Valvo cap-lista lataushetkellä scopea vasten (Vaihe 31.2).
+//
+// Käy vaatimukset järjestyksessä juoksevalla omistusmäärällä: jokaisen capin
+// pitää olla rakenteellisesti kelvollinen JA mahtua scopeen mukaan lukien
+// aiemmin tässä listassa hyväksytyt (määräraja kertyy). Jaettu yksittäisen
+// rekisteri-capin polun (checkScope) ja tulevien monen capin manifestien
+// (Vaihe 32 jakelu) välillä — sama valvonta molemmille.
+pub fn enforceCapsAtLoad(sc: scope.Scope, caps: []const CapReq, owned_start: u32) bool {
+    // Käy vaatimukset järjestyksessä.
+    var i: usize = 0;
+    while (i < caps.len) : (i += 1) {
+        // Rakenne ensin: tunnettu tyyppi, ei varattuja bittejä, ei tyhjä maski.
+        if (!validateSingleCap(caps[i].cap_type, caps[i].rights_mask)) return false;
+        // Omistusmäärä ennen tätä luontia (aloitus + aiemmat hyväksytyt).
+        // Listat ovat lyhyitä (MAX_CAPS=8) — ylivuoto ei mahdollinen.
+        const owned: u32 = owned_start + @as(u32, @intCast(i));
+        // Jokaisen luonnin pitää läpäistä scope erikseen.
+        if (!scope.allowsCreate(sc, caps[i].cap_type, caps[i].rights_mask, owned)) return false;
+    }
+    // Koko lista valvottu.
+    return true;
+}
+
 // Mahtuuko manifesti scopeen — false → EPERM dispatchissa.
 pub fn checkScope(sc: scope.Scope, m: Manifest) bool {
     // Nopea koko manifestin scope-leikkaus ensin.
     if (!umanifest.fitsScope(m, sc.allowed_types, sc.allowed_rights, sc.max_caps)) return false;
-    // Käy capit yksitellen juoksevalla määrällä (max_caps kertyy).
-    var i: usize = 0;
-    while (i < m.caps_len) : (i += 1) {
-        // Nykyinen cap-omistus ennen tätä luontia.
-        const owned: u32 = @intCast(i);
-        // Jokaisen luonnin pitää läpäistä scope erikseen.
-        if (!scope.allowsCreate(sc, m.caps[i].cap_type, m.caps[i].rights_mask, owned)) return false;
-    }
-    // Koko manifesti scopen sisällä.
-    return true;
+    // Valvo cap-lista juoksevalla määrällä (nollasta lataushetkellä).
+    return enforceCapsAtLoad(sc, m.caps[0..m.caps_len], 0);
 }

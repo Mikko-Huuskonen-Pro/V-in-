@@ -69,6 +69,8 @@ pub fn isRegistered(num: u64) bool {
         24 => true,
         // sys_plugin_unload (Vaihe 30) — purkaa plugineja fuzzissa.
         25 => true,
+        // sys_plugin_transfer (Vaihe 31) — siirtää cappeja nimiavaruuksien välillä.
+        26 => true,
         // Kaikki muut slotit tyhjät tai taulukon ulkopuolella.
         else => false,
     };
@@ -124,6 +126,8 @@ pub fn isDangerous(num: u64) bool {
         24 => true,
         // sys_plugin_unload — vapauttaa kehyksiä ja pidejä fuzzissa.
         25 => true,
+        // sys_plugin_transfer — mutatoi capability-taulukkoa fuzzissa.
+        26 => true,
         // Muut numerot turvallisia tai ENOSYS.
         else => false,
     };

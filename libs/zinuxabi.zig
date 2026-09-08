@@ -52,6 +52,8 @@ pub const SYS_mem_map: u64 = 23;
 pub const SYS_plugin_load: u64 = 24;
 // Syscall-numero: sys_plugin_unload(pid) → 0 onnistui tai neg. virhe (Vaihe 30).
 pub const SYS_plugin_unload: u64 = 25;
+// Syscall-numero: sys_plugin_transfer(src_pid, src_slot, dest_pid, rights_mask) → uusi slot tai neg. virhe (Vaihe 31).
+pub const SYS_plugin_transfer: u64 = 26;
 // Syscall-numero: sys_test_return — palaa kernel boot-testiin (vain kehitys).
 pub const SYS_test_return: u64 = 10;
 

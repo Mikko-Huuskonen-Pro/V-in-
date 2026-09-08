@@ -124,6 +124,14 @@ pub fn pluginParent(pid: u64) ?u64 {
     return registry[idx].parent_pid;
 }
 
+// Hae pluginin scope-raja — null jos ei plugin (Vaihe 31 gateway).
+pub fn pluginScope(pid: u64) ?scope.Scope {
+    // Etsi rekisteristä.
+    const idx = findIndex(pid) orelse return null;
+    // Palauta kopio scopesta.
+    return registry[idx].plugin_scope;
+}
+
 // Rekisteröi ladattu plugin scopella — false jos rekisteri täynnä.
 pub fn registerPlugin(pid: u64, parent_pid: u64, sc: scope.Scope) bool {
     // Varmista nollattu rekisteri.

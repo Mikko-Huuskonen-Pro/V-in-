@@ -676,6 +676,36 @@ pub fn build(b: *std.Build) void {
     copy_plugin_test_elf.addFileArg(embedded_plugin_test_path);
     copy_plugin_test_elf.step.dependOn(&plugin_test_exe.step);
 
+    // --- Plugin transfer userland test ELF (Vaihe 31.3) — upotetaan kerneliin ---
+    const pxfer_lib_mod = b.createModule(.{
+        .root_source_file = b.path("userland/lib/plugin_transfer.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    const plugin_xfer_test_mod = b.createModule(.{
+        .root_source_file = b.path("userland/plugin_xfer_test/main.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    plugin_xfer_test_mod.red_zone = false;
+    plugin_xfer_test_mod.stack_protector = false;
+    plugin_xfer_test_mod.single_threaded = true;
+    plugin_xfer_test_mod.code_model = .large;
+    plugin_xfer_test_mod.addImport("pxfer", pxfer_lib_mod);
+    const plugin_xfer_test_exe = b.addExecutable(.{
+        .name = "zinux-plugin-xfer-test",
+        .root_module = plugin_xfer_test_mod,
+    });
+    plugin_xfer_test_exe.setLinkerScript(b.path("userland/plugin_xfer_test/user.ld"));
+    plugin_xfer_test_exe.root_module.addAssemblyFile(b.path("userland/plugin_xfer_test/start.S"));
+    b.installArtifact(plugin_xfer_test_exe);
+
+    const embedded_plugin_xfer_test_path = b.path("kernel/loader/plugin_xfer_test_prog.bin");
+    const copy_plugin_xfer_test_elf = b.addSystemCommand(&.{ "cp", "-f" });
+    copy_plugin_xfer_test_elf.addFileArg(plugin_xfer_test_exe.getEmittedBin());
+    copy_plugin_xfer_test_elf.addFileArg(embedded_plugin_xfer_test_path);
+    copy_plugin_xfer_test_elf.step.dependOn(&plugin_xfer_test_exe.step);
+
     const kernel = b.addExecutable(.{
         .name = "zinux-kernel",
         .root_module = kernel_mod,
@@ -710,6 +740,7 @@ pub fn build(b: *std.Build) void {
     kernel.step.dependOn(&copy_cross_ipc_test_elf.step);
     kernel.step.dependOn(&copy_mem_map_test_elf.step);
     kernel.step.dependOn(&copy_plugin_test_elf.step);
+    kernel.step.dependOn(&copy_plugin_xfer_test_elf.step);
     b.installArtifact(kernel);
 
     // --- Host-testit ---

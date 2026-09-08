@@ -68,3 +68,22 @@ test "masks match capability_core layout" {
     // Null-tyyppi nollabitti.
     try std.testing.expectEqual(@as(u32, 0), cap.typeBit(.null));
 }
+
+test "gateway transfer allows scoped subset and denies the rest" {
+    // Kohde-B: portti, send/recv/read, katto 4.
+    const dest = scope.initScope(8, scope.TYPE_PORT, scope.MASK_SEND | scope.MASK_RECV | scope.MASK_READ, 4);
+    // Sallittu: recv+read-osajoukko tyhjään nimiavaruuteen.
+    try std.testing.expect(scope.allowsGatewayTransfer(dest, 1, scope.MASK_RECV | scope.MASK_READ, 0, true, true, true));
+    // Katto täynnä (4/4) → kiinni.
+    try std.testing.expect(!scope.allowsGatewayTransfer(dest, 1, scope.MASK_RECV, 4, true, true, true));
+    // Grant puuttuu kohdescopesta → kiinni.
+    try std.testing.expect(!scope.allowsGatewayTransfer(dest, 1, scope.MASK_GRANT, 0, true, true, true));
+    // Lähteessä ei grantia → kiinni.
+    try std.testing.expect(!scope.allowsGatewayTransfer(dest, 1, scope.MASK_RECV, 0, false, true, true));
+    // Ei osajoukko (lähteessä vain recv) → kiinni.
+    try std.testing.expect(!scope.allowsGatewayTransfer(dest, 1, scope.MASK_SEND, 0, true, false, true));
+    // Osapuolet/kutsuja kelvottomat → kiinni.
+    try std.testing.expect(!scope.allowsGatewayTransfer(dest, 1, scope.MASK_RECV, 0, true, true, false));
+    // Tuntematon tyyppi (0) → kiinni.
+    try std.testing.expect(!scope.allowsGatewayTransfer(dest, 0, scope.MASK_RECV, 0, true, true, true));
+}

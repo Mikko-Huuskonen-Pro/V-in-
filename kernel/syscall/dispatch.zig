@@ -44,6 +44,8 @@ const plugin_loader = @import("../plugin/loader.zig");
 const plugin_manifest = @import("../plugin/manifest.zig");
 // Tuo plugin-scope — initScope/validate lataajan biteistä (Vaihe 30).
 const plugin_scope = @import("../plugin/scope.zig");
+// Tuo plugin IPC -yhdyskäytävä — gatewayTransfer nimiavaruuksien välille (Vaihe 31).
+const ns_map = @import("../plugin/ns_map.zig");
 
 // Syscall-käsittelijän funktiotyyppi (6 argumenttia, i64 paluu).
 const SyscallFn = *const fn (u64, u64, u64, u64, u64, u64) i64;
@@ -666,6 +668,28 @@ fn sysPluginLoad(a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) i64 {
     return @intCast(pid);
 }
 
+// sys_plugin_transfer — gateway-siirto pluginista toiseen (Vaihe 31).
+// ABI: RAX=26, RDI=src_pid, RSI=src_slot, RDX=dest_pid, R10=rights_mask
+// (4. argumentti R10:ssä — CPU ylikirjoittaa RCX:n SYSCALL:ssa).
+// Kutsuja = currentPid: vain boot/init tai lähdeplugin itse saa avata portin
+// (gateway valvoo scopea molemmissa päissä). Suljettu portti → EPERM.
+fn sysPluginTransfer(a1: u64, a2: u64, a3: u64, a4: u64, _: u64, _: u64) i64 {
+    // Lähdepluginin pid (u64, ei kavennusta).
+    const src_pid = a1;
+    // Lähdeslotti — @truncate, ei @intCast: ylisuuri rekisteri katkaistaan
+    // jolloin lookup epäonnistuu ja portti sulkeutuu EPERM:iin sen sijaan
+    // että safety-paniikki kaataisi kernelin (ring 3 hallitsee rekistereitä).
+    const src_slot: u32 = @truncate(a2);
+    // Kohdepluginin pid (u64, ei kavennusta).
+    const dest_pid = a3;
+    // Oikeusmaski — katkaistu, gateway hylkää varatut bitit EPERM:llä.
+    const rights_mask: u32 = @truncate(a4);
+    // Gateway päättää + asentaa, tai null.
+    const derived = ns_map.gatewayTransfer(src_pid, src_slot, dest_pid, rights_mask) orelse return abi.EPERM;
+    // Palauta kohteen slottinumero.
+    return @intCast(derived);
+}
+
 // sys_plugin_unload — pura plugin + vapauta resurssit (Vaihe 30).
 fn sysPluginUnload(a1: u64, _: u64, _: u64, _: u64, _: u64, _: u64) i64 {
     // Purettavan pluginin pid.
@@ -738,6 +762,8 @@ const handlers: [32]?SyscallFn = blk: {
     table[@intCast(abi.SYS_plugin_load)] = sysPluginLoad;
     // Rekisteröi sys_plugin_unload (resurssien vapautus, Vaihe 30).
     table[@intCast(abi.SYS_plugin_unload)] = sysPluginUnload;
+    // Rekisteröi sys_plugin_transfer (gateway-siirto, Vaihe 31).
+    table[@intCast(abi.SYS_plugin_transfer)] = sysPluginTransfer;
     // Palauta valmis taulukko.
     break :blk table;
 };

@@ -54,3 +54,45 @@ test "scope check denies escalation and cap ceiling" {
     // Molemmat mahtuvat.
     try std.testing.expect(kmanifest.checkScope(roomy, m3));
 }
+
+test "caps list enforcement admits in-scope lists and denies the rest" {
+    // Kahden capin lista: port/send + memory/map.
+    const reqs = [_]kmanifest.CapReq{
+        // Portti send-oikeuksin.
+        .{ .cap_type = 1, .rights_mask = scope.MASK_SEND },
+        // Muisti map-oikeuksin.
+        .{ .cap_type = 5, .rights_mask = scope.MASK_MAP },
+    };
+    // Väljä scope molemmille, katto 2.
+    const roomy = scope.initScope(9, scope.TYPE_PORT | scope.TYPE_MEMORY, scope.MASK_SEND | scope.MASK_MAP, 2);
+    // Koko lista läpäisee juoksevalla määrällä.
+    try std.testing.expect(kmanifest.enforceCapsAtLoad(roomy, &reqs, 0));
+    // Tiukka katto (1) — toinen ei mahdu.
+    const tight = scope.initScope(9, scope.TYPE_PORT | scope.TYPE_MEMORY, scope.MASK_SEND | scope.MASK_MAP, 1);
+    // Katto estää.
+    try std.testing.expect(!kmanifest.enforceCapsAtLoad(tight, &reqs, 0));
+    // Esiladattu yksi (owned_start=1) katolla 2 — yksi mahtuu vielä.
+    try std.testing.expect(kmanifest.enforceCapsAtLoad(roomy, reqs[0..1], 1));
+    // Esiladattu kaksi katolla 2 — mikään ei mahdu.
+    try std.testing.expect(!kmanifest.enforceCapsAtLoad(roomy, reqs[0..1], 2));
+    // Kahden lista esiladattuna (1+2) katolla 2 — toinen ylittää.
+    try std.testing.expect(!kmanifest.enforceCapsAtLoad(roomy, &reqs, 1));
+    // Väärä tyyppi listassa (irq) → rakenteellinen hylky.
+    const bad_type = [_]kmanifest.CapReq{
+        // IRQ ei manifestissa sallittu.
+        .{ .cap_type = 3, .rights_mask = scope.MASK_READ },
+    };
+    // Tyyppi estetty.
+    try std.testing.expect(!kmanifest.enforceCapsAtLoad(roomy, &bad_type, 0));
+    // Varattu oikeusbitti → hylky.
+    const bad_rights = [_]kmanifest.CapReq{
+        // Bitti 6 varattu.
+        .{ .cap_type = 1, .rights_mask = 1 << 6 },
+    };
+    // Oikeudet estetty.
+    try std.testing.expect(!kmanifest.enforceCapsAtLoad(roomy, &bad_rights, 0));
+    // Tyhjä lista läpäisee tyhjänä (ei luonteja).
+    const empty = [_]kmanifest.CapReq{};
+    // Vacuous true.
+    try std.testing.expect(kmanifest.enforceCapsAtLoad(roomy, &empty, 0));
+}
