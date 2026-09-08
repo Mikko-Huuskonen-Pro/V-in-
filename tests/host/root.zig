@@ -140,3 +140,8 @@ test {
 test {
     _ = @import("registry_test.zig");
 }
+
+// Tuo plugin-heal-diagnostiikan yksikkötestit (Vaihe 33).
+test {
+    _ = @import("plugin_heal_test.zig");
+}

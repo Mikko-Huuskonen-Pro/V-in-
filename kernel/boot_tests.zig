@@ -197,6 +197,9 @@ pub fn runAll() void {
     // Vaihe 31 — plugin IPC gateway (caps-lista + syscall-siirto pluginista toiseen).
     const plugin_transfer = @import("syscall/plugin_transfer_syscall.zig");
     plugin_transfer.runBootTest();
+    // Vaihe 33 — self-heal: diagnostiikka + validointi + hot-swap (sama pid).
+    const plugin_heal = @import("syscall/plugin_heal_syscall.zig");
+    plugin_heal.runBootTest();
     // Kaikki integraatiotestit ajettu.
     log.info("All boot tests OK");
 }

@@ -81,6 +81,14 @@ pub fn isValidEmbeddedId(id: u64) bool {
     return id == PLUGIN_EMBEDDED_ID;
 }
 
+// Upotetun plugin-ELF:n tavut swap-latausta varten (Vaihe 33 paikallaanvaihto).
+//
+// Palauttaa saman binäärin jonka loadPlugin lataa — swap lataa tuoreen
+// instanssin samaan pidiin ilman uutta rekisteri-allokaatiota.
+pub fn pluginElf() []const u8 {
+    return plugin_elf;
+}
+
 // Etsi pluginin rekisteri-indeksi pid:llä — null jos ei ladattu plugin.
 fn findIndex(pid: u64) ?usize {
     // Varmista nollattu rekisteri.

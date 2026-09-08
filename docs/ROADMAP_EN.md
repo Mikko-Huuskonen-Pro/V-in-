@@ -577,7 +577,7 @@ zig build boot-test
 | **31** | Plugin IPC framework | Cross-namespace capability transfer for the plugin ecosystem | ✅ |
 | **31.5** | Plugin snapshots & restore | Checkpoint/restore entire plugin state (memory, caps, regs) |
 | **32** | Plugin ecosystem & untrusted distribution | Signing, registry, community audit, `zig build plugin-install` | ✅ |
-| **33** | Self-healing ("Everything is replaceable") | Auto-diagnosis, patch generation, hot-swap validated plugins |
+| **33** | Self-healing ("Everything is replaceable") | Auto-diagnosis, patch generation, hot-swap validated plugins | ✅ |
 | **34** | Task-driven composition (The Eeden Phase) | Declare a task → Zinux composes minimal environment → runs → decomposes |
 | **35** | Federated Zinux (clustered capabilities) | Network-capability delegation, remote plugin, failover |
 | **36** | Hardware-as-a-Service | Device declares capability → driver self-generated at runtime |
@@ -748,18 +748,39 @@ zig build plugin-install -Dplugin-url=.../demo_plugin_tampered.zpkg -Dplugin-key
 - **Installer** (`tools/plugin_verify.zig` + `build.zig` step): request-file protocol (no argv parsing — fixed `zig-out/plugin-install/request`), `std.Io` file I/O (Zig 0.16 API), verify-then-copy (never installs on failure). Fixtures under `tests/fixtures/plugin_registry/` (test pubkey, good + tampered packages, index).
 - **Key decision**: no private keys in the repo and no signer tool — fixtures were signed once with an ephemeral test key (since discarded); verification needs only the public key.
 
-#### Phase 33 — Self-Healing ("Everything is Replaceable")
+#### Phase 33 — Self-Healing ("Everything is Replaceable") ✅
 
 > **Goal**: Auto-diagnosis, patch generation, validated hot-swap without human intervention.
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| 33.1 | Plugin error diagnostics (last faults, mem pressure, IPC latency) | `kernel/plugin_diag.zig` | ⬜ |
-| 33.2 | Patch generation design doc (ABI diff, ELF patching) | `docs/SELF_HEAL.md` | ⬜ |
-| 33.3 | Validation pipe: run corrected plugin in sandbox before swap | `tests/plugin_heal/` | ⬜ |
-| 33.4 | Hot-swap orchestration (freeze→kill→rename→bridge IPC) | `kernel/plugin_swap.zig` | ⬜ |
+| 33.1 | Plugin error diagnostics (last faults, mem pressure, IPC latency) | `kernel/plugin_diag.zig` | ✅ pure core + `Plugin diagnostics OK` boot test |
+| 33.2 | Patch generation design doc (ABI diff, ELF patching) | `docs/SELF_HEAL.md` | ✅ in-place reload model (no byte-patching) |
+| 33.3 | Validation pipe: run corrected plugin in sandbox before swap | `tests/host/plugin_heal_test.zig`, `kernel/syscall/plugin_heal_syscall.zig` | ✅ offline pipe + live A→B gateway + `Plugin heal validation OK` |
+| 33.4 | Hot-swap orchestration (freeze→kill→rename→bridge IPC) | `kernel/plugin_swap.zig` | ✅ in-place same-pid swap + `Self-heal OK` |
 
 **Dependency**: Phase 31.5 (snapshots). Phase 30 (plugin lifecycle).
+
+**Test**:
+```bash
+zig build test
+# diag (2) + validation pipe (1) host tests OK (114/114 passed)
+zig build boot-test
+# Expected serial: Plugin heal validation OK, Plugin diagnostics OK,
+# Hot-swap replaced plugin, Self-heal OK, All boot tests OK
+```
+
+**Implementation summary:**
+- **Diag core** (`kernel/plugin_diag.zig`, dependency-free pure logic like `scope.zig`, host-testable): fixed table (16 rows), saturating `error_count` (`DIAG_MAX_ERRORS=3`), `FaultType` heuristic from error code, max-tracking IPC latency, pure `recordMemoryPressure(pid, free_now, free_baseline)` (caller passes `pmm` numbers in — no freestanding imports in the core). Unknown pid → `crashed` (fail-closed).
+- **Swap** (`kernel/plugin_swap.zig`, freestanding): in-place same-pid reload — snapshot shared (non-old-owned) caps → fresh PML4 + `loadElfWithStack` alongside → revoke owned + clear slots + swap PML4 → scope-checked reinstall → registry refresh. Pid reuse keeps the append-only process table hole-free (new pid + old free would orphan the tail — documented). Old-owned caps die in teardown; owned-state migration needs Phase 31.5 snapshots (documented limit, stateless + shared-port plugins fully heal today).
+- **Boot test** (`kernel/syscall/plugin_heal_syscall.zig`, registered in `boot_tests.zig` after Phase 31): loads A with grant scope, installs a BOOT-owned shared port (continuity) + an A-owned grant cap, proves the offline pipe (manifest + scope + gateway predicate), proves a live A→B gateway message, unloads B (LIFO-clean), crashes A (3 faults → `crashed`), swaps in place, verifies continuity message + ring 3 run, unloads A.
+- **Loader hook**: `loader.pluginElf()` accessor for the swap reload (same bytes `loadPlugin` uses).
+- **Wiring**: `build.zig` host module `plugin_diag_core`; `tests/host/plugin_heal_test.zig` (3 tests) registered in `tests/host/root.zig`.
+
+**Verification evidence (2026-09-08):**
+- `zig build test --summary all` → 114/114 host tests passed (incl. 3 new heal tests).
+- `zig build` + `zig build -Dboot=full` (freestanding kernel incl. new boot test) → passed.
+- QEMU `boot-test` serial (`Plugin heal validation OK`, `Plugin diagnostics OK`, `Self-heal OK`) → pending CI (no QEMU/xorriso on dev machine, same as phases 29–31).
 
 #### Phase 34 — Task-Driven Composition (The Eeden Phase)
 

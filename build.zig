@@ -918,6 +918,13 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     host_test_mod.addImport("registry_index", registry_idx_mod);
+    // Vaihe 33.1 — plugin-diagnostiikkaydin host-testeihin (riippuvuudeton).
+    const plugin_diag_core_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/plugin_diag.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("plugin_diag_core", plugin_diag_core_mod);
     const host_tests = b.addTest(.{
         .root_module = host_test_mod,
     });
