@@ -53,9 +53,9 @@ pub fn mapPageEnsure(virt: u64, phys: u64, flags: paging.PageFlags) bool {
         flags,
         allocFramePhys,
     );
-    // Flushaa TLB uuden kartoituksen jälkeen.
-    if (ok) paging.flushTlb(virt);
-    // Palauta onnistuminen kutsujalle.
+    // Jos uusia sivutauluja (PML4/PDPT/PD) luotiin, ladataan CR3 uudelleen,
+    // jotta CPU näkee uudet hakemistorakenteet ja TLB tyhjentyy.
+    if (ok) paging.setCr3(paging.getCr3());
     return ok;
 }
 
