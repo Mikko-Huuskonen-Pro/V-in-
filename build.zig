@@ -903,6 +903,21 @@ pub fn build(b: *std.Build) void {
     plugin_manifest_kernel_mod.addImport("scope.zig", scope_core_mod);
     plugin_manifest_kernel_mod.addImport("plugin_manifest", plugin_manifest_mod);
     host_test_mod.addImport("plugin_manifest_kernel", plugin_manifest_kernel_mod);
+    // Vaihe 32.2 — plugin-pakettiformaatti host-testeihin + verify-työkaluun.
+    const registry_pkg_mod = b.createModule(.{
+        .root_source_file = b.path("userland/plugin_registry/package.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    registry_pkg_mod.addImport("plugin_manifest", plugin_manifest_mod);
+    host_test_mod.addImport("registry_package", registry_pkg_mod);
+    // Vaihe 32.2 — plugin-rekisterihakemisto host-testeihin (riippuvuudeton).
+    const registry_idx_mod = b.createModule(.{
+        .root_source_file = b.path("userland/plugin_registry/registry.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("registry_index", registry_idx_mod);
     const host_tests = b.addTest(.{
         .root_module = host_test_mod,
     });
@@ -913,6 +928,48 @@ pub fn build(b: *std.Build) void {
     const run_host_tests = b.step("test", "Run host unit tests");
     run_host_tests.dependOn(&b.addRunArtifact(host_tests).step);
     run_host_tests.dependOn(&b.addRunArtifact(elf_core_tests).step);
+
+    // --- Vaihe 32.4 — plugin-install: hae URL:stä + varmenna Ed25519 + asenna ---
+    // Käyttö: zig build plugin-install -Dplugin-url=<https|file> -Dplugin-key=<64 hex>
+    // Luottamus tulee KUTSujan avaimesta; tyhjä url/key → askel epäonnistuu heti.
+    const plugin_url = b.option([]const u8, "plugin-url", "Plugin package URL for plugin-install (https:// or file://)") orelse "";
+    const plugin_key = b.option([]const u8, "plugin-key", "Trusted Ed25519 pubkey hex (64 chars) for plugin-install") orelse "";
+    // Varmennin-työkalu (host-exe, rakennetaan vain tätä askelta varten).
+    const verify_mod = b.createModule(.{
+        .root_source_file = b.path("tools/plugin_verify.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    verify_mod.addImport("registry_package", registry_pkg_mod);
+    const verify_exe = b.addExecutable(.{
+        .name = "zinux-plugin-verify",
+        .root_module = verify_mod,
+    });
+    // Haku + pyyntötiedosto varmentimelle (kiinteä polku työkalun kanssa).
+    const fetch_pkg = b.addSystemCommand(&.{
+        "bash", "-c",
+        b.fmt(
+            \\set -euo pipefail
+            \\URL="{s}"
+            \\KEY="{s}"
+            \\if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            \\  echo "usage: zig build plugin-install -Dplugin-url=<url> -Dplugin-key=<64 hex>" >&2
+            \\  exit 1
+            \\fi
+            \\DIR="zig-out/plugin-install"
+            \\REG="zig-out/plugin-registry"
+            \\mkdir -p "$DIR" "$REG"
+            \\curl -fsSL "$URL" -o "$DIR/pkg.zpkg"
+            \\NAME="$(basename "$URL")"
+            \\printf '%s\n' "$DIR/pkg.zpkg" "$KEY" "$REG" "$NAME" > "$DIR/request"
+        , .{ plugin_url, plugin_key }),
+    });
+    // Varmennus + asennus (exit != 0 → paketti EI asennu).
+    const run_verify = b.addRunArtifact(verify_exe);
+    run_verify.setCwd(b.path("."));
+    run_verify.step.dependOn(&fetch_pkg.step);
+    const install_step = b.step("plugin-install", "Fetch, Ed25519-verify and install a plugin package");
+    install_step.dependOn(&run_verify.step);
 
     // --- Limine binary fetch + host tool build ---
     const cache_path_raw = b.pathFromRoot(limine_cache);

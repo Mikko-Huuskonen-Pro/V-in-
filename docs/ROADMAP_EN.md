@@ -576,7 +576,7 @@ zig build boot-test
 | **30** | `sys_plugin_load / unload` | Load/unload user-space plugin binaries at runtime | ✅ |
 | **31** | Plugin IPC framework | Cross-namespace capability transfer for the plugin ecosystem | ✅ |
 | **31.5** | Plugin snapshots & restore | Checkpoint/restore entire plugin state (memory, caps, regs) |
-| **32** | Plugin ecosystem & untrusted distribution | Signing, registry, community audit, `zig build plugin-install` |
+| **32** | Plugin ecosystem & untrusted distribution | Signing, registry, community audit, `zig build plugin-install` | ✅ |
 | **33** | Self-healing ("Everything is replaceable") | Auto-diagnosis, patch generation, hot-swap validated plugins |
 | **34** | Task-driven composition (The Eeden Phase) | Declare a task → Zinux composes minimal environment → runs → decomposes |
 | **35** | Federated Zinux (clustered capabilities) | Network-capability delegation, remote plugin, failover |
@@ -717,18 +717,36 @@ zig build boot-test
 
 **Dependency**: Phase 25 (page-table per-process). Hardest single sub-phase in Eeden stretch.
 
-#### Phase 32 — Plugin Ecosystem & Untrusted Distribution
+#### Phase 32 — Plugin Ecosystem & Untrusted Distribution ✅
 
 > **Goal**: Infrastructure for untrusted third-party plugins — signing, registry, audit docs.
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| 32.1 | Plugin signing spec (Ed25519) + format | `docs/PLUGIN_SIGNING.md` | ⬜ |
-| 32.2 | Public plugin registry pattern (minimal manifest net) | `userland/plugin_registry/` | ⬜ |
-| 32.3 | Community audit guide | `docs/PLUGIN_AUDIT.md` | ⬜ |
-| 32.4 | `zig build plugin-install <url>` in `build.zig` | `build.zig` | ⬜ |
+| 32.1 | Plugin signing spec (Ed25519) + format | `docs/PLUGIN_SIGNING.md` | ✅ spec + test vectors + `signing_test` (fixed vector, tamper, canonical pin, fixture end-to-end) |
+| 32.2 | Public plugin registry pattern (minimal manifest net) | `userland/plugin_registry/` | ✅ `package.zig` (canonical 110 B + `ZPKG` framing) + `registry.zig` (index parse/lookup) + `registry_test` |
+| 32.3 | Community audit guide | `docs/PLUGIN_AUDIT.md` | ✅ M1–M5 mechanical checks, capability review, severity rubric, worked example |
+| 32.4 | `zig build plugin-install <url>` in `build.zig` | `build.zig` | ✅ fetch (curl) + `tools/plugin_verify.zig` (Ed25519 gate) + local registry; demo good→installed / tampered→rejected |
 
 **Dependency**: None (documentation + tooling). Can start **in parallel** with Phases 30–31.
+
+**Test**:
+```bash
+zig build test
+# signing (5) + registry (3) host tests OK
+zig build plugin-install -Dplugin-url=file://$PWD/tests/fixtures/plugin_registry/demo_plugin.zpkg -Dplugin-key=$(cat tests/fixtures/plugin_registry/trusted_test_key.hex)
+# plugin-verify: INSTALLED 'demo' v1 (2 caps)
+zig build plugin-install -Dplugin-url=.../demo_plugin_tampered.zpkg -Dplugin-key=...
+# plugin-verify: SIGNATURE REJECTED for 'demo', exit 1, nothing installed
+```
+
+**Implementation summary:**
+- **Format** (`userland/plugin_registry/package.zig`, freestanding-safe, no crypto): canonical 110-byte manifest (little-endian, fixed layout — trailing zeros signed), `ZPKG` framing `[magic 4][len u32][canonical 110][sig 64]` = 182 B. `BadMagic/BadLength/BadManifest` rejections name the cause.
+- **Registry** (`userland/plugin_registry/registry.zig`, dependency-free): `name version keyid-hex url` text index (`file://`/`https://` only — plain `http` rejected for distribution), duplicate-name rejection, `keyid` = first 8 pubkey bytes. Trust comes from pinned keys, never from the index.
+- **Signing spec** (`docs/PLUGIN_SIGNING.md`): Ed25519/RFC 8032, keyid rules, canonical layout table, framing table, sign/verify procedures, TEST-ONLY vectors (seed `zinux-phase32-test-seed-00000001`, `hello zinux`), demo fixture appendix. Deferred honestly: no kernel-side checks (no `std.crypto` freestanding), no revocation lists, no ELF payload signing.
+- **Audit guide** (`docs/PLUGIN_AUDIT.md`): M1–M5 mechanical checks, per-right necessity/minimality review, `grant` and `memory+map+write` red flags, severity rubric (REJECT/CUT/INSTALL), report template, worked example (bundled `plugin_test` → CUT: its port cap is unjustified).
+- **Installer** (`tools/plugin_verify.zig` + `build.zig` step): request-file protocol (no argv parsing — fixed `zig-out/plugin-install/request`), `std.Io` file I/O (Zig 0.16 API), verify-then-copy (never installs on failure). Fixtures under `tests/fixtures/plugin_registry/` (test pubkey, good + tampered packages, index).
+- **Key decision**: no private keys in the repo and no signer tool — fixtures were signed once with an ephemeral test key (since discarded); verification needs only the public key.
 
 #### Phase 33 — Self-Healing ("Everything is Replaceable")
 

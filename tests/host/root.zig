@@ -130,3 +130,13 @@ test {
 test {
     _ = @import("plugin_load_test.zig");
 }
+
+// Tuo plugin-allekirjoituksen yksikkötestit (Vaihe 32.1).
+test {
+    _ = @import("signing_test.zig");
+}
+
+// Tuo plugin-rekisterin yksikkötestit (Vaihe 32.2).
+test {
+    _ = @import("registry_test.zig");
+}
