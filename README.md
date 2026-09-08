@@ -106,7 +106,7 @@ For more than three decades, Linux developers have built and maintained an enorm
 We do not intend to throw that work away: [VSL](https://github.com/Mikko-Huuskonen-Pro/VSL)
 
 Where Linux has already solved a problem well, Väinö can build on it.
-The linux-väinö repository provides a path to preserve and use that existing hardware support while Väinö explores a fundamentally different approach to drivers.
+The VSL repository provides a path to preserve and use that existing hardware support while Väinö explores a fundamentally different approach to drivers.
 
 > **35 years of engineering is not something to replace. It is something to stand on.**
 
