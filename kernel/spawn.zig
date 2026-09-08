@@ -78,6 +78,10 @@ pub fn spawnEmbedded(id: u64) ?u64 {
     const pml4_ptr: [*]u8 = @ptrFromInt(pml4_virt);
     @memset(pml4_ptr[0..4096], 0);
 
+    // b2) Peri kernel-puolisko (256..511) — syscallet/IRQ-käsittelijät
+    //     näkyviin lapsen sivutauluun (jaettu alemmat taulut, ks. vmm).
+    vmm.inheritKernelHalf(pml4_phys);
+
     // c) Tallenna prosessitaulukkoon.
     if (!process.setPageTable(pid, pml4_phys)) {
         _ = process.freePid(pid);

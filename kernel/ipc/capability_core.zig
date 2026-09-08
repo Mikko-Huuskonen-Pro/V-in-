@@ -116,6 +116,72 @@ pub fn rightsIntersect(a: Rights, b: Rights) Rights {
     };
 }
 
+// Vaihe 29.1 — Rights-maskiapurit plugin-scopelle (ei kiertoa scope.zig:iin).
+//
+// **Vastuu**: Muunna Rights ↔ u32 ja tarkista scope-ehto ilman scope-importtia.
+// **Miksi täällä**: scope.zig on riippuvuudeton; tämä pitää bittilayoutin yhdessä
+//   paikassa kernelin puolella. Bitit täsmäävät cap_syscall_core.MASK_*.
+//   Tyyppibitit käyttävät ABI-numeroita (1=port, 5=memory); kernel-enum .memory
+//   (arvo 2) kartoitetaan ABI-bitille 5 jotta manifest/scope täsmäävät dispatchiin.
+
+// Muunna Rights → u32 maski (scope/manifest vertailuun).
+pub fn rightsToMask(rights: Rights) u32 {
+    // Aloita tyhjästä maskista.
+    var mask: u32 = 0;
+    // read-bit.
+    if (rights.read) mask |= 1 << 0;
+    // write-bit.
+    if (rights.write) mask |= 1 << 1;
+    // send-bit.
+    if (rights.send) mask |= 1 << 2;
+    // recv-bit.
+    if (rights.recv) mask |= 1 << 3;
+    // map-bit.
+    if (rights.map) mask |= 1 << 4;
+    // grant-bit.
+    if (rights.grant) mask |= 1 << 5;
+    // Palauta maski.
+    return mask;
+}
+
+// Onko Rights annetun scope-oikeusmaskin osajoukko.
+pub fn rightsWithinMask(rights: Rights, allowed_mask: u32) bool {
+    // Muunna rakenne maskiksi.
+    const have = rightsToMask(rights);
+    // Varatut bitit sallitussa maskissa hylätään (kutsujan bugi).
+    if ((allowed_mask & ~@as(u32, 0x3F)) != 0) return false;
+    // Jokaisen pyydetyn bitin pitää löytyä sallitusta.
+    return (have & ~allowed_mask) == 0;
+}
+
+// Palauta CapType:n ABI-bitti scope-vertailuun (1<<abi_numero).
+pub fn typeBit(typ: CapType) u32 {
+    // Portti on ABI 1.
+    if (typ == .port) return @as(u32, 1) << 1;
+    // Kernel-enum .memory (2) luodaan ABI-tyypillä 5 (dispatch-reititys).
+    if (typ == .memory) return @as(u32, 1) << 5;
+    // IRQ-vektori (tuleva).
+    if (typ == .irq) return @as(u32, 1) << 3;
+    // Endpoint stub (tuleva IPC).
+    if (typ == .endpoint) return @as(u32, 1) << 4;
+    // Null ei koskaan sallittu.
+    return 0;
+}
+
+// Tarkista scope-ehto: tyyppi sallittu JA oikeudet maskin sisällä.
+pub fn scopeAllows(allowed_types_mask: u32, allowed_rights_mask: u32, typ: CapType, rights: Rights) bool {
+    // Tyyppibitin pitää löytyä sallitusta maskista.
+    const bit = typeBit(typ);
+    // Null tai tuntematon tyyppi hylätään.
+    if (bit == 0) return false;
+    // Tyyppi ei sallittu scopessa.
+    if ((allowed_types_mask & bit) == 0) return false;
+    // Oikeudet scopen ulkopuolella.
+    if (!rightsWithinMask(rights, allowed_rights_mask)) return false;
+    // Molemmat ehdot täyttyvät.
+    return true;
+}
+
 // Nollaa objektit ja slotit — kutsutaan bootissa ja testeissä.
 pub fn initCore() void {
     // Alusta prosessitaulukko (rekisteröi boot-pid 1).
@@ -382,6 +448,52 @@ pub fn revokeObject(object_id: u32) bool {
     }
     // Audit: objekti peruutettu.
     audit.record(.revoke, owner, object_id, audit.NO_SLOT, @bitCast(Rights{}), @intFromEnum(typ));
+    // Onnistui.
+    return true;
+}
+
+// Peruuta kaikki annetun prosessin omistamat objektit — plugin-unload (Vaihe 30).
+// Palauttaa peruttujen objektien määrän. Jokainen revokeObject nollaa myös
+// kaikki viittaavat slotit kaikissa prosesseissa (portti vapautuu samalla).
+pub fn revokeAllOwnedBy(pid: u64) u32 {
+    // Vaadi alustus.
+    if (!initialized) return 0;
+    // Peruttujen laskuri.
+    var count: u32 = 0;
+    // Käy objektitaulukko — kerää ensin id:t (revoke muokkaa taulukkoa).
+    var i: usize = 0;
+    while (i < objects.len) : (i += 1) {
+        // Vain käytössä olevat, tämän pidin omistamat.
+        if (!objects[i].used) continue;
+        // Omistaja ei täsmää.
+        if (objects[i].owner_pid != pid) continue;
+        // Objektin id = indeksi + 1.
+        const id: u32 = @intCast(i + 1);
+        // Peruuta objekti + kaikki viitteet.
+        if (revokeObject(id)) count += 1;
+    }
+    // Palauta peruttujen määrä.
+    return count;
+}
+
+// Tyhjennä yhden prosessin capability-slotit — plugin-unload (Vaihe 30).
+// Poistaa myös muiden omistamiin objekteihin jääneet viitteet (esim. siirretyt
+// cap-viitteet), jotta vapautetun pidin slotteja ei voi käyttää uudelleen.
+pub fn clearSlotsForPid(pid: u64) bool {
+    // Vaadi alustus.
+    if (!initialized) return false;
+    // Hae prosessin taulukkoindeksi.
+    const proc_idx = process.findIndex(pid) orelse return false;
+    // Nollaa jokainen slotti.
+    var si: usize = 0;
+    while (si < MAX_SLOTS) : (si += 1) {
+        // Ei objektiviitettä.
+        slots[proc_idx][si].object_id = 0;
+        // Ei oikeuksia.
+        slots[proc_idx][si].rights = .{};
+    }
+    // Nollaa slottilaskuri — uudet asennukset alkavat indeksistä 0.
+    slot_counts[proc_idx] = 0;
     // Onnistui.
     return true;
 }

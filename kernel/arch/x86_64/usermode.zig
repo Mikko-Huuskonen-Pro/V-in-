@@ -121,8 +121,15 @@ pub fn enterUserAs(entry: u64, user_stack_top: u64, pid: u64) void {
     const rflags: u64 = 0x2;
     // Vaihe 26: tallenna kernel CR3 ennen iretq (palautetaan usermodeReturnToKernel).
     saved_kernel_cr3 = vmm.kernel_pml4_phys;
+    // Vaihe 25/26: aja lapsi sen omalla PML4:llä jos sellainen on allokoitu
+    // (spawnEmbedded/plugin); page_table==0 tarkoittaa jaettua kernel-PML4:ää
+    // (getPageTable palauttaa nollan sellaisenaan — ei nullina).
+    var target_cr3 = vmm.kernel_pml4_phys;
+    if (process.getPageTable(pid)) |pt| {
+        if (pt != 0) target_cr3 = pt;
+    }
     // Siirry ring 3:een -- iretq + kohde PML4 cr3 (Vaihe 26 per-prosessi isolatio).
-    usermodeEnterIret(entry, user_stack_top, user_cs, user_ss, rflags, vmm.kernel_pml4_phys);
+    usermodeEnterIret(entry, user_stack_top, user_cs, user_ss, rflags, target_cr3);
 }
 
 // Boot-testi — ring 3 sys_write("hello") + paluu kerneliin.

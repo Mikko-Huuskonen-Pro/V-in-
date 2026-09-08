@@ -7,7 +7,10 @@
 // Boot/init-prosessin oletus-pid (stub userland ennen spawnia).
 pub const BOOT_PID: u64 = 1;
 // Maksimi prosessien määrä kernelin taulukossa.
-pub const MAX_PROCESSES: usize = 16;
+// Boot-testisviitti kuluttaa ~16 pidiä ennen vaihetta 24
+// (spawn/cross-IPC/S2/ps/wait-testit varaavat vapauttamatta).
+// 32 antaa kasvunvaraa; cap-slottitaulukko skaalautuu mukana.
+pub const MAX_PROCESSES: usize = 32;
 // Ei vanhempaa — boot-prosessin parent_pid (Vaihe 24 wait).
 pub const NO_PARENT: u64 = 0;
 

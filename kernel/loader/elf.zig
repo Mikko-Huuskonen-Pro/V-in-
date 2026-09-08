@@ -83,23 +83,52 @@ fn mapSegmentRange(vaddr: u64, mem_size: u64, executable: bool) bool {
 }
 
 // Kopioi segmentin file-osuus ELF-blobista + nollaa BSS.
+// Kohde kirjoitetaan HHDM-aliasen kautta: kartoitus on saatettu tehdä
+// kohde-PML4:ään (per-process spawn), jota kernelin aktiivinen CR3 ei
+// välttämättä näe — suora vaddr-kirjoitus aiheuttaisi page faultin.
 fn copySegmentData(seg: core.LoadSegment, elf_data: []const u8) bool {
     // Segmentin file data ELF-blobissa.
     if (seg.file_offset + seg.file_size > elf_data.len) return false;
-    // Kohde muistissa segmentin linkitys-vaddr:ssa (user-ELF ei relocatable).
-    const dst: [*]u8 = @ptrFromInt(seg.vaddr);
-    // Lähde ELF-blobissa.
-    const src = elf_data[seg.file_offset..][0..seg.file_size];
     // SMAP: salli user-sivujen kirjoitus kernelistä.
     user_access.stac();
-    // Kopioi alustettu osa (file_size).
-    @memcpy(dst[0..seg.file_size], src);
+    // Kopioi alustettu osa sivu kerrallaan HHDM-aliasen kautta.
+    var off: u64 = 0;
+    while (off < seg.file_size) {
+        // Kohdesivun alku ja offset sivun sisällä.
+        const vpage = (seg.vaddr + off) & ~(paging.PAGE_SIZE - 1);
+        const page_off = (seg.vaddr + off) & (paging.PAGE_SIZE - 1);
+        // Etsi kehyksen fyysinen osoite kohde-PML4:stä.
+        const pte_raw = paging.getPteRaw(vmm.pml4Phys(), vmm.hhdm(), vpage) orelse {
+            user_access.clac();
+            return false;
+        };
+        // Kehyksen alku (4 KiB tasattu) + HHDM-alias + sivun sisäinen offset.
+        const phys = pte_raw & 0x000FFFFFFFFFF000;
+        const hptr: [*]u8 = @ptrFromInt(vmm.physToVirt(phys) + page_off);
+        // Tämän sivun osuus (ei sivurajan yli).
+        const n = @min(paging.PAGE_SIZE - page_off, seg.file_size - off);
+        // Kopioi yksi pätkä ELF-blobista.
+        @memcpy(hptr[0..n], elf_data[seg.file_offset + off ..][0..n]);
+        // Seuraava pätkä.
+        off += n;
+    }
     // Nollaa BSS (mem_size - file_size) jos on.
     if (seg.mem_size > seg.file_size) {
-        // BSS alkaa file-osion jälkeen.
-        const bss_len = seg.mem_size - seg.file_size;
-        // Nollaa laajennusalue.
-        @memset(dst[seg.file_size..][0..bss_len], 0);
+        // BSS-alue sivu kerrallaan HHDM-aliasen kautta.
+        var bss_off: u64 = seg.file_size;
+        while (bss_off < seg.mem_size) {
+            const vpage = (seg.vaddr + bss_off) & ~(paging.PAGE_SIZE - 1);
+            const page_off = (seg.vaddr + bss_off) & (paging.PAGE_SIZE - 1);
+            const pte_raw = paging.getPteRaw(vmm.pml4Phys(), vmm.hhdm(), vpage) orelse {
+                user_access.clac();
+                return false;
+            };
+            const phys = pte_raw & 0x000FFFFFFFFFF000;
+            const hptr: [*]u8 = @ptrFromInt(vmm.physToVirt(phys) + page_off);
+            const n = @min(paging.PAGE_SIZE - page_off, seg.mem_size - bss_off);
+            @memset(hptr[0..n], 0);
+            bss_off += n;
+        }
     }
     // Palauta SMAP-suojaus.
     user_access.clac();

@@ -190,6 +190,22 @@ pub fn frameToPhys(frame_index: usize) u64 {
     return mem_base + @as(u64, frame_index) * FRAME_SIZE;
 }
 
+// Muunna fyysinen osoite kehysindeksiksi — null jos reunaehto rikki (Vaihe 30 unload).
+pub fn physToFrame(phys: u64) ?usize {
+    // Osoite ennen basea ei kelpaa.
+    if (phys < mem_base) return null;
+    // Siirtymä basesta.
+    const off = phys - mem_base;
+    // Pitää olla kehysrajalla (4 KiB aligned).
+    if (off % FRAME_SIZE != 0) return null;
+    // Kehysindeksi siirtymästä.
+    const idx: usize = @intCast(off / FRAME_SIZE);
+    // Indeksi bitmapin ulkopuolella.
+    if (idx >= frame_count) return null;
+    // Palauta kehysindeksi.
+    return idx;
+}
+
 // Palauta kehysten kokonaismäärä (bitmapin kattama alue).
 pub fn totalFrames() usize {
     // Palauta frame_count.

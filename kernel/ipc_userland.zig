@@ -12,6 +12,8 @@ const usermode = @import("arch/x86_64/usermode.zig");
 const port = @import("ipc/port.zig");
 // Tuo capability — createAndInstall slotille.
 const cap = @import("ipc/capability_core.zig");
+// Tuo user_access — stac/clac SMAP-yhteensopivuuteen user-sivuille.
+const user_access = @import("arch/x86_64/user_access.zig");
 // Tuo lokitus boot-viesteihin.
 const log = @import("lib/log.zig");
 
@@ -20,6 +22,10 @@ const ipc_test_elf = @embedFile("loader/ipc_test_prog.bin");
 
 // IPC-testin pinon heap-slot — erillään driver (83) ja shell (67) sloteista.
 const IPC_TEST_STACK_SLOT: u64 = 99;
+
+// IPC boot-info — kernel kirjoittaa portti-capin slotin ennen ring 3
+// (userland/ipc_test/user.ld .capboot, symboli ipcParentSlot).
+const IPC_PARENT_SLOT_VADDR: u64 = 0xFFFFFFFF90061000;
 
 // Boot-testi — luo portti+cap, lataa ipc_test-ELF, hyppää ring 3:een.
 pub fn runBootTest() void {
@@ -39,20 +45,14 @@ pub fn runBootTest() void {
         // recv-oikeus.
         .recv = true,
     };
-    // Asenna capability portille — slot 4 kun aiemmat testit käyttävät 0–3.
+    // Asenna capability portille — slotti vaihtelee aiempien vaiheiden mukaan,
+    // välitetään userlandille .capboot-boot-infossa (ei kovakoodattua slot 4).
     const slot = cap.createAndInstall(.port, 1, port_id, rights) orelse {
         // Capability-asennus epäonnistui.
         log.err("Userland IPC cap install failed");
         // Lopeta testi.
         return;
     };
-    // Varmista odotettu slotti — boot-testi olettaa slot 4.
-    if (slot != 4) {
-        // Slot-indeksi muuttunut — boot-testi ei luotettava.
-        log.err("Userland IPC unexpected slot");
-        // Lopeta testi.
-        return;
-    }
     // Lataa ipc_test-ELF muistiiin (segmentit + user-pino).
     const loaded = elf.loadElfWithStack(ipc_test_elf, IPC_TEST_STACK_SLOT) orelse {
         // Jäsentäminen tai sivukartoitus epäonnistui.
@@ -60,6 +60,14 @@ pub fn runBootTest() void {
         // Lopeta testi.
         return;
     };
+    // Kirjoita portti-capin slotti userland .capboot-osoitteeseen.
+    const slot_ptr: *u32 = @ptrFromInt(IPC_PARENT_SLOT_VADDR);
+    // SMAP: salli user-sivun kirjoitus kernelistä.
+    user_access.stac();
+    // Tallenna slotti ring 3 -testiä varten.
+    slot_ptr.* = slot;
+    // Palauta SMAP-suojaus.
+    user_access.clac();
     // Siirry ring 3:een ipcMain entry-pisteessä.
     usermode.enterUser(loaded.entry, loaded.stack_top);
     // Paluu sys_test_return:lla — userland tulosti "userland ipc OK".

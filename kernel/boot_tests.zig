@@ -185,6 +185,15 @@ pub fn runAll() void {
     // Vaihe 25 — per-PID page table isolation test (eri PML4, sama VA).
     const phase_25 = @import("phase_25_boot_test.zig");
     phase_25.runBootTest();
+    // Vaihe 29 — plugin sandbox scope (capability-raja + eristys).
+    const plugin_scope = @import("plugin/plugin.zig");
+    plugin_scope.runBootTest();
+    // Vaihe 30 — sys_plugin_load (manifesti+scope-valvottu lataus + ajo).
+    const plugin_load = @import("syscall/plugin_load_syscall.zig");
+    plugin_load.runBootTest();
+    // Vaihe 30 — sys_plugin_unload (oikeus + purku + resurssit).
+    const plugin_unload = @import("syscall/plugin_unload_syscall.zig");
+    plugin_unload.runBootTest();
     // Kaikki integraatiotestit ajettu.
     log.info("All boot tests OK");
 }

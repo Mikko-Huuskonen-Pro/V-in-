@@ -134,3 +134,47 @@ test "transfer slot to another process" {
     try std.testing.expect(cap.setCurrentProcess(2));
     try std.testing.expect(cap.transferSlotToPid(slot_c, 3, .{ .recv = true }) == null);
 }
+
+test "revoke all owned by pid" {
+    // Tuo porttien ydin — createPort testiin.
+    const port = @import("port_core");
+    // Puhdas tila — prosessit 1, 2.
+    cap.initCore();
+    port.initCore();
+    try std.testing.expect(cap.registerProcess(2));
+    // Kaksi porttia prosessille 2.
+    const p1 = port.createPort() orelse return error.TestFailed;
+    const p2 = port.createPort() orelse return error.TestFailed;
+    _ = cap.createAndInstall(.port, 2, p1, .{ .send = true, .recv = true }) orelse return error.TestFailed;
+    _ = cap.createAndInstall(.port, 2, p2, .{ .send = true }) orelse return error.TestFailed;
+    // Yksi portti prosessille 1 (ei saa peruuntua).
+    const p3 = port.createPort() orelse return error.TestFailed;
+    const keep = cap.createAndInstall(.port, 1, p3, .{ .send = true }) orelse return error.TestFailed;
+    // Peruuta kaikki pid 2:n omistamat.
+    try std.testing.expectEqual(@as(u32, 2), cap.revokeAllOwnedBy(2));
+    // Vaihda konteksti pid 2:een — sen slotit mitätöity.
+    try std.testing.expect(cap.setCurrentProcess(2));
+    // Pid 2:n slotti 0 ei enää anna oikeuksia.
+    try std.testing.expect(!cap.slotHasRights(0, .{ .send = true }));
+    // Pid 1:n slotti yhä voimassa.
+    try std.testing.expect(cap.setCurrentProcess(1));
+    try std.testing.expect(cap.slotHasRights(keep, .{ .send = true }));
+    // Uusintaperuutus löytää nolla.
+    try std.testing.expectEqual(@as(u32, 0), cap.revokeAllOwnedBy(2));
+}
+
+test "clear slots for pid" {
+    // Puhdas tila — prosessit 1, 2.
+    cap.initCore();
+    try std.testing.expect(cap.registerProcess(2));
+    // Asenna slotti pid 2:lle.
+    _ = cap.createAndInstall(.port, 2, 77, .{ .send = true }) orelse return error.TestFailed;
+    // Slotti löytyy ennen tyhjennystä.
+    try std.testing.expect(cap.lookupSlotForPid(2, 0) != null);
+    // Tyhjennä pid 2:n slotit.
+    try std.testing.expect(cap.clearSlotsForPid(2));
+    // Slotti poissa tyhjennyksen jälkeen.
+    try std.testing.expect(cap.lookupSlotForPid(2, 0) == null);
+    // Tuntematon pid → false.
+    try std.testing.expect(!cap.clearSlotsForPid(999));
+}

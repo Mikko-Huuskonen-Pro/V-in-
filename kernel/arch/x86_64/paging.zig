@@ -107,8 +107,9 @@ pub fn getCr3() u64 {
     // Lue CR3 CPU:sta inline assemblyllä.
     asm volatile ("mov %%cr3, %[out]"
         : [out] "=r" (cr3),
-    );
-    // Palauta aktiivisen sivutaulun fyysinen osoite.
+        :
+        : .{ .memory = true });
+    // Palauta aktiivisen sivutaulun fyysisen osoite.
     return cr3;
 }
 
@@ -118,7 +119,7 @@ pub fn setCr3(pml4_phys: u64) void {
     asm volatile ("mov %[in], %%cr3"
         :
         : [in] "r" (pml4_phys),
-    );
+        : .{ .memory = true });
 }
 
 // Lue CR2 — page fault -virheen virtuaaliosoite.
@@ -372,5 +373,5 @@ pub fn flushTlb(virt: u64) void {
     asm volatile ("invlpg (%[addr])"
         :
         : [addr] "r" (virt),
-    );
+        : .{ .memory = true });
 }

@@ -115,3 +115,18 @@ test {
 test {
     _ = @import("wait_syscall_test.zig");
 }
+
+// Tuo plugin scope -yksikkötestit (Vaihe 29.1).
+test {
+    _ = @import("scope_test.zig");
+}
+
+// Tuo plugin-manifest-yksikkötestit (Vaihe 29.2).
+test {
+    _ = @import("manifest_test.zig");
+}
+
+// Tuo plugin-manifest-valvonnan yksikkötestit (Vaihe 30.2).
+test {
+    _ = @import("plugin_load_test.zig");
+}

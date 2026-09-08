@@ -38,6 +38,12 @@ const ps_core = @import("ps_syscall_core.zig");
 const wait_core = @import("wait_syscall_core.zig");
 // Tuo sys_mem_map syscall-ydin — CapType.memory + mapPageEnsure (Vaihe 28).
 const mem_map_core = @import("mem_map_core.zig");
+// Tuo plugin-loader — loadPlugin/unloadPlugin + rekisteri (Vaihe 30).
+const plugin_loader = @import("../plugin/loader.zig");
+// Tuo plugin-manifest-valvonta — buildSingleCapManifest/checkScope (Vaihe 30).
+const plugin_manifest = @import("../plugin/manifest.zig");
+// Tuo plugin-scope — initScope/validate lataajan biteistä (Vaihe 30).
+const plugin_scope = @import("../plugin/scope.zig");
 
 // Syscall-käsittelijän funktiotyyppi (6 argumenttia, i64 paluu).
 const SyscallFn = *const fn (u64, u64, u64, u64, u64, u64) i64;
@@ -549,9 +555,9 @@ fn sysCapGetResource(a1: u64, _: u64, _: u64, _: u64, _: u64, _: u64) i64 {
     return @intCast(resource);
 }
 
-// sys_cap_create — luo uusi capability (portti) annetuilla oikeuksilla.
+// sys_cap_create — luo uusi capability (portti tai muisti) annetuilla oikeuksilla.
 fn sysCapCreate(a1: u64, a2: u64, _: u64, _: u64, _: u64, _: u64) i64 {
-    // Capability-tyyppi (CAP_TYPE_PORT = 1).
+    // Capability-tyyppi (CAP_TYPE_PORT = 1 tai CAP_TYPE_MEMORY = 5).
     const typ: u32 = @intCast(a1);
     // Oikeudet bitmaskina.
     const mask: u32 = @intCast(a2);
@@ -561,13 +567,26 @@ fn sysCapCreate(a1: u64, a2: u64, _: u64, _: u64, _: u64, _: u64) i64 {
     const rights_raw = cap_core.rightsFromMask(mask) orelse return abi.EINVAL;
     // Muunna cap_syscall_core.Rights → capability_core.Rights.
     const rights: cap.Rights = @bitCast(rights_raw);
-    // Luo fyysinen IPC-portti.
-    const port_id = port.createPort() orelse return abi.EINVAL;
-    // Asenna capability nykyisen prosessin slottiin (Vaihe 23 security S1).
+    // Nykyinen prosessi omistaa uuden capabilityn (Vaihe 23 security S1).
     const owner = process.currentPid();
-    const slot = cap.createAndInstall(.port, owner, port_id, rights) orelse return abi.EINVAL;
+    // Luo oikean tyyppinen capability-objekti ja asenna se slottiin.
+    const slot: ?u32 = switch (typ) {
+        cap_core.CAP_TYPE_PORT => blk: {
+            const port_id = port.createPort() orelse return abi.EINVAL;
+            break :blk cap.createAndInstall(.port, owner, port_id, rights);
+        },
+        cap_core.CAP_TYPE_MEMORY => blk: {
+            // Muisti-capability perustuu tyhjänä (resource = 0), fyysinen kehys allokoitetaan myöhemmin sys_mem_map-kutsussa.
+            const resource_id: u64 = 0;
+            break :blk cap.createAndInstall(.memory, owner, resource_id, rights);
+        },
+        else => null, // typeValid on tarkistanut jo.
+    };
+
+    if (slot == null) return abi.EINVAL;
+
     // Palauta uuden capability-slotin indeksi.
-    return @intCast(slot);
+    return @intCast(slot.?);
 }
 
 // Callback ps_core:lle — pid taulukko-indeksillä.
@@ -605,6 +624,64 @@ fn sysPs(a1: u64, a2: u64, _: u64, _: u64, _: u64, _: u64) i64 {
 pub fn sysMemMap(a1: u64, a2: u64, _: u64, _: u64, _: u64, _: u64) i64 {
     // Kutsu mem_map_core.doMemMap(slot_idx, virt_addr).
     return mem_map_core.doMemMap(@intCast(a1), @intCast(a2));
+}
+
+// sys_plugin_load — lataa plugin-ELF manifesti+scope-valvonnalla (Vaihe 30).
+fn sysPluginLoad(a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) i64 {
+    // Plugin-ELF-tunniste (vaihe 30: vain 0).
+    const embedded_id = a1;
+    // Manifestin pyydetty cap-tyyppi (ABI: 1=port, 5=memory).
+    const req_type: u32 = @intCast(a2);
+    // Manifestin pyydetyt oikeudet maskina.
+    const req_rights: u32 = @intCast(a3);
+    // Scopen sallitut tyypit bittimaskina.
+    const scope_types: u32 = @intCast(a4);
+    // Scopen sallitut oikeudet bittimaskina.
+    const scope_rights: u32 = @intCast(a5);
+    // Scopen cap-katto (0 → oletus 8 initScope:ssa).
+    const max_caps: u32 = @intCast(a6);
+    // Tuntematon plugin-binääri.
+    if (!plugin_loader.isValidEmbeddedId(embedded_id)) return abi.EINVAL;
+    // Rakenna yhden capin manifesti rekistereistä (BadCapType/BadRights → EINVAL).
+    const m = plugin_manifest.buildSingleCapManifest(req_type, req_rights) catch return abi.EINVAL;
+    // Nykyinen prosessi on lataaja (unload-oikeus + parent).
+    const parent = process.currentPid();
+    // Rakenna scope lataajan biteistä (pid sidotaan ladattuun alle).
+    var sc = plugin_scope.initScope(parent, scope_types, scope_rights, max_caps);
+    // Scope itse kelvoton (tyhjät maskit).
+    if (!plugin_scope.validate(sc)) return abi.EINVAL;
+    // Manifesti scopen ulkopuolella → EPERM (ei eskalaatiota).
+    if (!plugin_manifest.checkScope(sc, m)) return abi.EPERM;
+    // Lataa ELF uudelle pid:lle omaan sivutauluun.
+    const pid = plugin_loader.loadPlugin(embedded_id) orelse return abi.ENOMEM;
+    // Sido scope ladattuun plugin-pidiin.
+    sc.plugin_pid = pid;
+    // Rekisteröi plugin — täysi rekisteri → siivoa lataus ja ENOMEM.
+    if (!plugin_loader.registerPlugin(pid, parent, sc)) {
+        // Pura osittainen lataus (capsit + PML4 + pid).
+        _ = plugin_loader.unloadPlugin(pid);
+        return abi.ENOMEM;
+    }
+    // Palauta pluginin pid.
+    return @intCast(pid);
+}
+
+// sys_plugin_unload — pura plugin + vapauta resurssit (Vaihe 30).
+fn sysPluginUnload(a1: u64, _: u64, _: u64, _: u64, _: u64, _: u64) i64 {
+    // Purettavan pluginin pid.
+    const pid = a1;
+    // Ei rekisteröity plugin.
+    if (!plugin_loader.isPlugin(pid)) return abi.ESRCH;
+    // Kutsuja + rekisteröity lataaja unload-tarkistukseen.
+    const caller = process.currentPid();
+    // Lataaja-parent selville.
+    const owner = plugin_loader.pluginParent(pid) orelse return abi.ESRCH;
+    // Vain lataaja tai boot saa purkaa (ei vieraiden pluginien tappoa).
+    if (caller != owner and caller != process.BOOT_PID) return abi.EPERM;
+    // Pura: omistetut capsit + slotit + PML4 + pid + rekisteri.
+    if (!plugin_loader.unloadPlugin(pid)) return abi.ESRCH;
+    // Onnistui.
+    return 0;
 }
 
 // Dispatch-taulukko — indeksi = syscall-numero (max 31).
@@ -657,6 +734,10 @@ const handlers: [32]?SyscallFn = blk: {
     table[@intCast(abi.SYS_ps)] = sysPs;
     // Rekisteröi sys_mem_map (memory-capability + mapPageEnsure, Vaihe 28).
     table[@intCast(abi.SYS_mem_map)] = sysMemMap;
+    // Rekisteröi sys_plugin_load (manifesti+scope-valvottu lataus, Vaihe 30).
+    table[@intCast(abi.SYS_plugin_load)] = sysPluginLoad;
+    // Rekisteröi sys_plugin_unload (resurssien vapautus, Vaihe 30).
+    table[@intCast(abi.SYS_plugin_unload)] = sysPluginUnload;
     // Palauta valmis taulukko.
     break :blk table;
 };

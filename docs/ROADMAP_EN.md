@@ -564,6 +564,243 @@ zig build boot-test
 
 ---
 
+## Long-Term Vision (Phases 29–37)
+
+> These phases evolve Zinux from a monolithic microkernel into a **compositional, plugin-driven foundation** — "Zinux is not a fixed operating system. Zinux is a foundation for building operating systems."
+>
+> **Prerequisite chain**: Each phase builds on the capability model (25) + memory-cap mmap (28) already complete.
+
+| Phase | Theme | Goal |
+|-------|-------|------|
+| **29** | Plugin sandboxing model | Capability-bound, per-plugin address space isolation | ✅ |
+| **30** | `sys_plugin_load / unload` | Load/unload user-space plugin binaries at runtime | ✅ |
+| **31** | Plugin IPC framework | Cross-namespace capability transfer for the plugin ecosystem |
+| **31.5** | Plugin snapshots & restore | Checkpoint/restore entire plugin state (memory, caps, regs) |
+| **32** | Plugin ecosystem & untrusted distribution | Signing, registry, community audit, `zig build plugin-install` |
+| **33** | Self-healing ("Everything is replaceable") | Auto-diagnosis, patch generation, hot-swap validated plugins |
+| **34** | Task-driven composition (The Eeden Phase) | Declare a task → Zinux composes minimal environment → runs → decomposes |
+| **35** | Federated Zinux (clustered capabilities) | Network-capability delegation, remote plugin, failover |
+| **36** | Hardware-as-a-Service | Device declares capability → driver self-generated at runtime |
+| **37** | Eeden Gate (autonomous lifecycle) | Self-verify: boot → compose → run 30d → decompose → core only |
+
+See `docs/eeden_roadmap_append (1).md` for detailed subtasks, files, and tests.
+
+---
+### Phase-0 Blocker — Fix `sys_cap_create(type=5)` Bug ✅
+
+Before any Eeden phase can work, **Phase 28 was functionally broken**: the ABI constant `CAP_TYPE_MEMORY = 5` in `cap_syscall_core.zig` was never routed by `sysCapCreate()` in `dispatch.zig`, which unconditionally called `port.createPort()` and installed a `.port` capability regardless of the type argument. Userland code calling `sys_cap_create(type=5)` returned `-22` (EINVAL).
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| **0.3** | **Implement type-aware routing in `sysCapCreate()`** | ✅ Switch/blk: port → `port.createPort()`, memory → `createAndInstall(.memory, …)` + safe null unwrap |
+| **#** | **Task** | **File** | **Status** |
+|---|------|------|--------|
+| 0.1 | Add `CAP_TYPE_MEMORY` branch in `do_capability_create()` | `kernel/syscall/dispatch.zig` | ✅ |
+| 0.2 | Verify: userland `mem_map_test` creates memory-cap via syscall, maps it, writes/reads back | `userland/mem_map_test/main.zig` + boot-test | ⬜ **pending** |
+
+**Implementation note**: Replaced unconditional `createAndInstall(.port, …)` with a type-switch block that routes `.port` → port allocation and `.memory` → `createAndInstall(.memory, owner, 0, rights)`. The memory capability's physical frame is still allocated lazily by Phase 28's `sys_mem_map()`. All Phases 29+ are now unblocked.
+
+---
+
+### Detailed Execution Plan
+
+#### Phase 29 — Plugin Sandboxing Model ✅
+
+> **Goal**: Define security boundaries. Every plugin is a process with restricted capabilities.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 29.1 | `plugin::Scope` struct + mask in `Rights` | `kernel/plugin/scope.zig`, `capability_core.zig` | ✅ `Scope{pid,types,rights,max_caps}` + `rightsToMask/scopeAllows` + `Plugin scope/sandbox OK` boot test |
+| 29.2 | Capability manifest format spec | `userland/plugin_manifest.zig` (schema) | ✅ `Manifest{validate/fitsScope}` + host tests |
+| 29.3 | Isolation invariant doc | `docs/PLUGIN_MODEL.md` | ✅ I1–I7 invariants |
+
+**Test**:
+```bash
+zig build test
+# scope + manifest + capability host tests OK (91/91 passed)
+zig build boot-test
+# Expected serial: Plugin scope OK, Plugin sandbox OK, All boot tests OK
+```
+
+**Implementation summary:**
+- **Scope core** (`kernel/plugin/scope.zig`, dependency-free pure logic, host-testable): `Scope{plugin_pid, allowed_types, allowed_rights, max_caps, require_isolation}` with `initScope` (clips unknown bits, defaults empty cap-limit to 8, caps at 32 = MAX_SLOTS), `validate`, `allowsType` (ABI-numbered bit: 1=port, 5=memory; 0/rejected types denied), `allowsRights` (requested ⊆ scope, reserved bits rejected), `allowsCreate` (type + rights + `count < max_caps`), `allowsDelegate` (new ⊆ old ∩ scope, no escalation), `isIsolated(page_table != 0)`.
+- **Rights-mask hook** (`kernel/ipc/capability_core.zig`, no import cycle with scope): `rightsToMask`, `rightsWithinMask`, `typeBit` (kernel `.memory` enum maps to ABI bit 5 so scope/manifest match `dispatch.zig` routing), `scopeAllows(types_mask, rights_mask, typ, rights)`. Pinned by host test "masks match capability_core layout".
+- **Boot test** (`kernel/plugin/plugin.zig`, registered in `boot_tests.zig` after Phase 25): positive checks (port/memory allowed, send/recv allowed, create under cap-limit, core-layer agreement, non-zero PML4 isolated) + negative checks (IRQ denied, grant leaked, cap-limit overflow, evil grant blocked at core layer, zero page-table not isolated). Prints `Plugin scope OK`, `Plugin sandbox OK`.
+- **Manifest schema** (`userland/plugin_manifest.zig`, fixed-size freestanding-safe, host-testable): `Manifest{name[32], version, abi_version=1, entry_offset, caps[8]{cap_type, rights_mask}}` with `init/addCap/validate/fitsScope`. Validation order `BadName → BadAbi → TooManyCaps → BadCapType → BadRights`; rejects non-printable/`/`-names, IRQ/endpoint types (deferred to Phase 30+), reserved rights bits, empty masks; `fitsScope` checks every requirement against scope (type bit + rights subset + count).
+- **Isolation model** (`docs/PLUGIN_MODEL.md`): invariants I1–I7 (per-pid slots, per-plugin address space, scope-subset holding, no-escalation delegation, manifest-is-request, global revocation, no silent broadening) + rejected alternatives (ambient authority, broad caps, trusting the manifest).
+- **Wiring**: `build.zig` host modules `scope_core` + `plugin_manifest`; `tests/host/scope_test.zig` (3 tests) + `manifest_test.zig` (3 tests) registered in `tests/host/root.zig`.
+- **Key design decision**: `scope.zig` has zero `@import`s to avoid a `capability_core ↔ scope` cycle; bit-layout compatibility is enforced by tests instead of shared imports.
+
+**Verification evidence (2026-09-08):**
+- `zig build test --summary all` → 91/91 host tests passed (incl. 6 new scope/manifest tests).
+- `zig build` (freestanding kernel incl. new boot test) → passed.
+- QEMU `boot-test` serial (`Plugin scope OK`, `Plugin sandbox OK`) → pending CI (no QEMU/xorriso on dev machine).
+
+
+#### Phase 30 — `sys_plugin_load` / `sys_plugin_unload` ✅
+
+> **Goal**: Runtime plugin lifecycle via syscalls, with manifest-driven capability enforcement.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 30.1 | ELF loader for plugins (reuses Phase 5 ELF parser) | `kernel/plugin/loader.zig` | ✅ `loadPlugin/runPlugin` + 8-entry registry (`plugin_prog.bin` @ 0xFFFFFFFF9008D000, stack slot 116) |
+| 30.2 | Manifest parser (`{caps:[], entry_offset, name}` JSON) | `kernel/plugin/manifest.zig` | ✅ `buildSingleCapManifest/checkManifest/checkScope` (register-carried 1-cap manifest; JSON deferred — no std.json in freestanding kernel, schema already multi-cap ready) |
+| 30.3 | `sys_plugin_load(path)` syscall | `kernel/syscall/plugin_load_syscall.zig` | ✅ `SYS_plugin_load=24`, `sys_plugin_load(embedded_id, req_type, req_rights, scope_types, scope_rights, max_caps)` → pid; `Plugin load OK` boot test |
+| 30.4 | `sys_plugin_unload(pid)` syscall + resource reclamation | `kernel/syscall/plugin_unload_syscall.zig` | ✅ `SYS_plugin_unload=25`, parent-or-boot only; revoke + slots + PML4 + pid reclaimed; `Plugin unload OK` boot test |
+
+**Dependency**: Phases 25+28 (per-process address spaces + memory-cap mmap).
+**Hook into existing boot-test**: register new plugin via init, verify it is alive.
+
+**Test**:
+```bash
+zig build test
+# plugin manifest + scope + capability + pmm host tests OK (98/98 passed)
+zig build boot-test
+# Expected serial: plg / Plugin load OK, Plugin unload OK, All boot tests OK
+```
+
+**Implementation summary:**
+- **Loader + registry** (`kernel/plugin/loader.zig`): `loadPlugin` mirrors the Phase 21/25 spawn flow (allocNextPid → parent=current → PML4 frame → memset → setPageTable → target_pml4 → `elf.loadElfWithStack` → setLoaded) with cleanup on every failure path; fixed 8-entry `PluginEntry{pid, parent_pid, scope}` registry (`register/unregister/isPlugin/pluginParent/pluginCount`); `runPlugin` via `enterUserAs` (prints `plg\n`); `unloadPlugin` = `revokeAllOwnedBy` + `clearSlotsForPid` + `physToFrame`→`freeFrame` PML4 + `setPageTable(0)` + `freePid` + unregister (best-effort order, tail-pid so no table holes).
+- **Manifest enforcement** (`kernel/plugin/manifest.zig`, host-testable): `validateSingleCap` structural check, `buildSingleCapManifest` (name "plugin"), `checkManifest` → EINVAL, `checkScope` (`fitsScope` + per-cap `allowsCreate` with running count) → EPERM. Imports userland schema as `plugin_manifest` build module (same `zinuxabi`/`process_core` pattern — relative cross-root `@import` is rejected by Zig 0.16 modules).
+- **Syscalls** (`dispatch.zig`, `libs/zinuxabi.zig`): `SYS_plugin_load=24` builds manifest + scope from registers (pid rebound to loaded pid after load; registry-full → unload + ENOMEM), `SYS_plugin_unload=25` requires caller == parent or boot (else EPERM), unknown/non-plugin pid → ESRCH. Handlers fit the existing `[32]` table.
+- **Reclamation helpers**: `capability_core.revokeAllOwnedBy` (revoke each owned object — ports freed, all referencing slots zeroed) + `clearSlotsForPid` (drop remaining references incl. transferred caps); `pmm.physToFrame` (aligned + in-range checked inverse of `frameToPhys`).
+- **Plugin ELF** (`userland/plugin_test/`: `start.S` prints `plg\n` + `SYS_test_return`, `user.ld` @ `0xFFFFFFFF9008D000` — free gap between 0x…C000 and 0x…E000): standard build.zig embed block → `kernel/loader/plugin_prog.bin`.
+- **Key design decisions**: register-carried manifest instead of JSON/pointers (no parser, no user-copy, identical path from ring 3 and boot-test `invoke`); unload keeps Phase 24 zombie semantics out — full removal, since plugins are replaceable units (I-model "everything is replaceable").
+
+**Verification evidence (2026-09-08):**
+- `zig build test --summary all` → 98/98 host tests passed (incl. 3 plugin-manifest-enforcement + 2 capability-reclaim + 1 pmm-physToFrame tests).
+- `zig build` (freestanding kernel incl. plugin ELF + new boot tests) → passed.
+- QEMU `boot-test` serial (`plg`, `Plugin load OK`, `Plugin unload OK`) → pending CI (no QEMU/xorriso on dev machine).
+
+#### Phase 31 — Plugin IPC Framework
+
+> **Goal**: Cross-namespace capability transfer through a gateway mechanism rooted in init.pid scope.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 31.1 | Namespace mapping: plugin A → plugin B capabilities | `kernel/plugin/ns_map.zig` | ⬜ |
+| 31.2 | Manifest `cap:[]` enforcement at load-time | `kernel/plugin/manifest.zig` (validator) | ⬜ |
+
+**Dependency**: Phase 29 (sandbox scope), Phases 22+30 (transfer + plugin infra).
+
+#### Phase 31.5 — Plugin Snapshots & Restore ⬛ Heavy
+
+> **Goal**: Full-state checkpoint/restore: memory pages, capability table, register file.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 31.5.1 | Snapshot struct (`base_addr`, `size`) + page-table walk | `kernel/snapshot.zig` | ⬜ |
+| 31.5.2 | `sys_plugin_checkpoint(slot)` → dump+W=0 guard | `kernel/syscall/snapshot_syscall.zig` | ⬜ |
+| 31.5.3 | `sys_plugin_restore(slot, id)` → remap + restore slots/regs | `kernel/syscall/restore_syscall.zig` | ⬜ |
+| 31.5.4 | Incremental snapshot (dirty-page tracking via #PF) | `kernel/snapshot_delta.zig` | ⬜ |
+| 31.5.5 | Watchdog: auto-restore on crash | `kernel/plugin_watchdog.zig` | ⬜ |
+
+**Dependency**: Phase 25 (page-table per-process). Hardest single sub-phase in Eeden stretch.
+
+#### Phase 32 — Plugin Ecosystem & Untrusted Distribution
+
+> **Goal**: Infrastructure for untrusted third-party plugins — signing, registry, audit docs.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 32.1 | Plugin signing spec (Ed25519) + format | `docs/PLUGIN_SIGNING.md` | ⬜ |
+| 32.2 | Public plugin registry pattern (minimal manifest net) | `userland/plugin_registry/` | ⬜ |
+| 32.3 | Community audit guide | `docs/PLUGIN_AUDIT.md` | ⬜ |
+| 32.4 | `zig build plugin-install <url>` in `build.zig` | `build.zig` | ⬜ |
+
+**Dependency**: None (documentation + tooling). Can start **in parallel** with Phases 30–31.
+
+#### Phase 33 — Self-Healing ("Everything is Replaceable")
+
+> **Goal**: Auto-diagnosis, patch generation, validated hot-swap without human intervention.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 33.1 | Plugin error diagnostics (last faults, mem pressure, IPC latency) | `kernel/plugin_diag.zig` | ⬜ |
+| 33.2 | Patch generation design doc (ABI diff, ELF patching) | `docs/SELF_HEAL.md` | ⬜ |
+| 33.3 | Validation pipe: run corrected plugin in sandbox before swap | `tests/plugin_heal/` | ⬜ |
+| 33.4 | Hot-swap orchestration (freeze→kill→rename→bridge IPC) | `kernel/plugin_swap.zig` | ⬜ |
+
+**Dependency**: Phase 31.5 (snapshots). Phase 30 (plugin lifecycle).
+
+#### Phase 34 — Task-Driven Composition (The Eeden Phase)
+
+> **Goal**: User declares a task → Zinux composes minimal environment → runs → decomposes.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 34.1 | Task Description Language (TDL) spec doc | `docs/TDL.md` | ⬜ |
+| 34.2 | AI-heuristic composer: resolve task→plugins | `userland/composer/` | ⬜ |
+| 34.3 | Core orchestrator: receives TDL, resolves caps, installs plugins | `kernel/composer.zig` | ⬜ |
+| 34.4 | Decompose on task-complete / timeout (LIFO plugin kill) | `kernel/decomposer.zig` | ⬜ |
+
+**Dependency**: Phases 30+32 (plugin load + registry). Phase 33 (self-healing guarantees).
+
+#### Phase 35 — Federated Zinux (Clustered Capabilities)
+
+> **Goal**: Capability delegation across machines; remote plugin migration + failover.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 35.1 | Capability tunnel over TCP (tuple + HMAC) | `kernel/net/cap_tunnel.zig` | ⬜ |
+| 35.2 | Remote IPC userland library (transparent forwarding) | `userland/remote_ipc/` | ⬜ |
+| 35.3 | Plugin migration: snapshot→push→restore on target | `kernel/migrate.zig` | ⬜ |
+| 35.4 | Failover: heartbeat + plugin replication on node loss | `kernel/failover.zig` | ⬜ |
+
+**Dependency**: Phase 31 (IPC), Phase 33 (snapshot-based migration). Largest new code surface in this stretch.
+
+#### Phase 36 — Hardware-as-a-Service (Design / Research)
+
+> **Goal**: Device declares capability → driver auto-generated at runtime. No persistent `.ko` files.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 36.1 | Hardware capability protocol spec | `docs/HW_CAP_PROTOCOL.md` | ⬜ |
+| 36.2 | Live driver code generator (Zig template expansion) | `kernel/hw_gen.zig` | ⬜ |
+| 36.3 | Driver lifecycle: generate → bind → exec → destroy | `kernel/hw_lifecycle.zig` | ⬜ |
+| 36.4 | "No persistent driver files" design note | `docs/NO_DRIVERS.md` | ⬜ |
+
+**Dependency**: Phase 6 (existing drivers as reference for device enumeration). Research phase — defer implementation until Phases 29–35 are stable.
+
+#### Phase 37 — Eeden Gate (Autonomous Lifecycle)
+
+> **Goal**: End-to-end self-verification: boot → compose → run → decompose → core only.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| 37.1 | 30-day autonomous simulation spec | `docs/EEDEN_DEMO.md` | ⬜ |
+| 37.2 | Lifecycle metrics collector (boot/composition/stability/failover) | `tests/eeden_metrics/` | ⬜ |
+| 37.3 | Final philosophy doc: "Zinux is a foundation for building operating systems" | `docs/EEDEN.md` | ⬜ |
+| 37.4 | CI gate step (fast-forwarded simulation) | `.github/workflows/eeden_gate.yml` | ⬜ |
+
+**Dependency**: All previous phases.
+
+---
+
+### Recommended Execution Order
+
+```
+🔴 BLOCKER → Phase 0: Fix sys_cap_create(type=5) bug ← blocks everything
+   ↓
+Phase 29 — Plugin sandbox model ✅ DONE (scope + manifest + PLUGIN_MODEL.md)
+   ↓
+Phase 30 — sys_plugin_load/unload ✅ DONE (lifecycle + enforcement + reclamation)
+   ↓
+Phase 31 — Plugin IPC framework ← NEXT (cross-scope cap transfer)
+Phase 31.5 — Snapshots & restore ⬛ 4 sessions, hardest kernel change
+Phase 32 — Distribution infrastructure (docs + build.zig — parallelizable ✅)
+Phase 33 — Self-healing (depends on 31.5 for hot-swap bridge)
+Phase 34 — TDL + composer ("The Eeden Phase" milestone)
+Phase 35 — Federation (network stack — biggest new surface, defer if risk-averse)
+Phase 36 — HW-as-a-service (research stage — design doc only for now)
+Phase 37 — E Eden Gate integration demo
+```
+
+**Parallelizable early**: Phase 32 (docs/registry) and Phase 34 TDL spec can be drafted alongside Phases 30–31.
+**Deferred to later**: Phase 36 is research; Phase 35 is high-risk networking — treat as stretch goals after the plugin core (30–33) is solid.
+
+---
+
 ## Inter-Phase Dependencies
 
 ```mermaid

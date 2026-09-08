@@ -49,7 +49,7 @@ pub fn runS2DedupTest() void {
     const child_pid = process.allocNextPid() orelse return;
     var i: u32 = 0;
     while (i < 4) : (i += 1) {
-        const slot_b = dispatch.invoke(abi.SYS_cap_transfer, @intCast(slot_a), @intCast(child_pid), @as(u64, 0x18), 0);
+        const slot_b = dispatch.invoke(abi.SYS_cap_transfer, @intCast(slot_a), @intCast(child_pid), @as(u64, 0x18), 0, 0, 0);
         if (slot_b <  0) break;
         if (first_slot == null) first_slot = slot_b;
         // Verify stable: every invocation returns same slot index.

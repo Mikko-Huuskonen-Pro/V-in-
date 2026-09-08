@@ -10,8 +10,8 @@
 
 // Tuo prosessitaulukko.
 const process = @import("process_core");
-// Tuo embedded spawn.
-const spawn = @import("spawn");
+// Tuo embedded spawn (sama hakemisto — ei moduulinimeä).
+const spawn = @import("spawn.zig");
 // Tuo lokitus.
 const log = @import("lib/log.zig");
 

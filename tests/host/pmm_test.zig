@@ -37,3 +37,21 @@ test "PMM available frame count" {
     // Vapaita jäljellä 31.
     try std.testing.expectEqual(@as(usize, 31), pmm.availableFrames());
 }
+
+// Testaa physToFrame käänteismuunnos (Vaihe 30 unload vapauttaa PML4-kehyksen).
+test "PMM phys to frame roundtrip" {
+    // Paikallinen bitmap 64 kehykselle.
+    var bmp: [8]u8 = undefined;
+    // Alusta PMM — base 0 testeissä.
+    pmm.init(&bmp, 64);
+    // Allokoi kehys.
+    const idx = pmm.allocFrame() orelse return error.TestFailed;
+    // Muunna phys-osoitteeksi ja takaisin.
+    const phys = pmm.frameToPhys(idx);
+    // Käänteismuunnos palauttaa saman indeksin.
+    try std.testing.expectEqual(idx, pmm.physToFrame(phys).?);
+    // Kohdistamaton osoite hylätään.
+    try std.testing.expect(pmm.physToFrame(phys + 1) == null);
+    // Alueen ulkopuolinen osoite hylätään.
+    try std.testing.expect(pmm.physToFrame(64 * 4096) == null);
+}

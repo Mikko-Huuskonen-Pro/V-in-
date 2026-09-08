@@ -1,6 +1,6 @@
 /* userland/ipc_test/user.ld — IPC userland -testin muistikartta @ 0xFFFFFFFF90060000 */
 
-/* Ring 3 IPC-testi — cap-slotti @ boot_info 0x90064000, pino heap-slot 99. */
+/* Ring 3 IPC-testi — portti-cap slot .capbootissa 0xFFFFFFFF90061000, pino heap-slot 99. */
 ENTRY(_start)
 
 SECTIONS
@@ -30,5 +30,12 @@ SECTIONS
     .bss : {
         *(COMMON)
         *(.bss .bss.*)
+    }
+
+    /* Kernel kirjoittaa IPC capability-slotin ennen ring 3 -hyppyä. */
+    . = ALIGN(0x1000);
+    .capboot : {
+        ipcParentSlot = .;
+        LONG(0);
     }
 }

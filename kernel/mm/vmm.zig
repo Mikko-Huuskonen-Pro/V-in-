@@ -13,8 +13,11 @@ const pmm = @import("pmm.zig");
 pub var hhdm_offset: u64 = undefined;
 // Aktiivisen PML4-taulun fyysinen osoite (Liminen CR3 bootissa, alustetaan bootissa).
 pub var kernel_pml4_phys: u64 = undefined;
-// Vaihe 25 kohde-PML4 per-prosessikartoitusta varten (alustetaan load-ELF-kutsussa).
-pub var target_pml4_phys: ?u64 = undefined;
+// Vaihe 25 kohde-PML4 per-prosessikartoitusta varten (null = käytä kernel-PML4).
+// HUOM: ei saa olla `undefined` — varhainen heap.init lukee tämän ennen
+// ensimmäistä spawn-kirjoitusta, ja undefined-luku taittui kääntäjässä
+// roskaksi (pml4_phys=0xE → ud2 QEMU-smokessa).
+pub var target_pml4_phys: ?u64 = null;
 // PMM-callback paging.mapPageEnsure:lle — palauttaa uuden kehyksen fyysinen osoite.
 fn allocFramePhys() ?u64 {
     // Allokoi vapaa 4 KiB kehys bitmapista.
@@ -100,6 +103,23 @@ pub fn mapNewPageEnsure(virt: u64, flags: paging.PageFlags) bool {
     return mapPageEnsure(virt, phys, flags);
 }
 
+// Kopioi kernel-PML4:n yläpuolisko (indeksit 256..511) lapsen tuoreeseen
+// PML4:ään. Lapsi tarvitsee kernel-kartoitukset syscalleja ja IRQ-käsit-
+// telijöitä varten — muuten ensimmäinen ring-3 syscall aiheuttaa page faultin.
+// HUOM: alemmat taulut jaetaan kernelin kanssa (ei CoW:a); lapsen omat
+// user-kartoitukset näkyvät siksi myös kernel-PML4:n kautta. Täysi
+// alitaulujen eristys on tulevaa työtä — PML4-taso eristää jo nyt.
+pub fn inheritKernelHalf(child_pml4_phys: u64) void {
+    // Lapsen tyhjä PML4 HHDM:n kautta.
+    const child: [*]paging.PageTableEntry = @ptrFromInt(physToVirt(child_pml4_phys));
+    // Kernelin aktiivinen PML4 HHDM:n kautta.
+    const kernel: [*]paging.PageTableEntry = @ptrFromInt(physToVirt(kernel_pml4_phys));
+    // Kopioi yläpuolisko merkintä kerrallaan.
+    var i: usize = 256;
+    while (i < 512) : (i += 1) {
+        child[i] = kernel[i];
+    }
+}
 // Palauta HHDM-offset (fys → virt: virt = phys + offset).
 pub fn hhdm() u64 {
     // Palauta tallennettu Limine HHDM-offset.

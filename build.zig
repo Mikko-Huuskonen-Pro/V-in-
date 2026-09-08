@@ -15,6 +15,15 @@ const std = @import("std");
 const limine_version = "12.6.1";
 const limine_cache = ".zig-cache/limine";
 
+/// Convert backslash path separators to forward slashes (fresh allocation —
+/// the old stack-buffer version returned a dangling slice, so every call
+/// aliased the same dead frame and ISO paths came out as garbage).
+fn posixPath(b: *std.Build, src: []const u8) []u8 {
+    const out = b.allocator.alloc(u8, src.len) catch @panic("OOM");
+    for (src, 0..) |c, i| out[i] = if (c == '\\') '/' else c;
+    return out;
+}
+
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
@@ -53,6 +62,14 @@ pub fn build(b: *std.Build) void {
         .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
     });
     kernel_mod.addImport("zinuxabi", abi_mod);
+    // Plugin-manifestiskeema kerneliin (Vaihe 30 manifest-valvonta).
+    const plugin_manifest_kernel_dep = b.createModule(.{
+        .root_source_file = b.path("userland/plugin_manifest.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    plugin_manifest_kernel_dep.single_threaded = true;
+    kernel_mod.addImport("plugin_manifest", plugin_manifest_kernel_dep);
 
     // Prosessitaulukko — capability-slotit per pid (Vaihe 20).
     const process_core_kernel_mod = b.createModule(.{
@@ -636,6 +653,29 @@ pub fn build(b: *std.Build) void {
     copy_mem_map_test_elf.addFileArg(embedded_mem_map_test_path);
     copy_mem_map_test_elf.step.dependOn(&mem_map_test_exe.step);
 
+    // --- Plugin userland test ELF (Vaihe 30) — upotetaan kerneliin ---
+    const plugin_test_mod = b.createModule(.{
+        .root_source_file = b.path("userland/plugin_test/main.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    plugin_test_mod.red_zone = false;
+    plugin_test_mod.stack_protector = false;
+    plugin_test_mod.single_threaded = true;
+    const plugin_test_exe = b.addExecutable(.{
+        .name = "zinux-plugin-test",
+        .root_module = plugin_test_mod,
+    });
+    plugin_test_exe.setLinkerScript(b.path("userland/plugin_test/user.ld"));
+    plugin_test_exe.root_module.addAssemblyFile(b.path("userland/plugin_test/start.S"));
+    b.installArtifact(plugin_test_exe);
+
+    const embedded_plugin_test_path = b.path("kernel/loader/plugin_prog.bin");
+    const copy_plugin_test_elf = b.addSystemCommand(&.{ "cp", "-f" });
+    copy_plugin_test_elf.addFileArg(plugin_test_exe.getEmittedBin());
+    copy_plugin_test_elf.addFileArg(embedded_plugin_test_path);
+    copy_plugin_test_elf.step.dependOn(&plugin_test_exe.step);
+
     const kernel = b.addExecutable(.{
         .name = "zinux-kernel",
         .root_module = kernel_mod,
@@ -669,6 +709,7 @@ pub fn build(b: *std.Build) void {
     kernel.step.dependOn(&copy_cross_spawn_elf.step);
     kernel.step.dependOn(&copy_cross_ipc_test_elf.step);
     kernel.step.dependOn(&copy_mem_map_test_elf.step);
+    kernel.step.dependOn(&copy_plugin_test_elf.step);
     b.installArtifact(kernel);
 
     // --- Host-testit ---
@@ -808,6 +849,29 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     host_test_mod.addImport("wait_syscall_core", wait_syscall_core_mod);
+    // Vaihe 29.1 — plugin scope -ydin host-testeihin (riippuvuudeton).
+    const scope_core_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/plugin/scope.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("scope_core", scope_core_mod);
+    // Vaihe 29.2 — plugin-manifest-skeema host-testeihin (riippuvuudeton).
+    const plugin_manifest_mod = b.createModule(.{
+        .root_source_file = b.path("userland/plugin_manifest.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("plugin_manifest", plugin_manifest_mod);
+    // Vaihe 30.2 — plugin-manifestin kernel-valvonta host-testeihin.
+    const plugin_manifest_kernel_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/plugin/manifest.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    plugin_manifest_kernel_mod.addImport("scope.zig", scope_core_mod);
+    plugin_manifest_kernel_mod.addImport("plugin_manifest", plugin_manifest_mod);
+    host_test_mod.addImport("plugin_manifest_kernel", plugin_manifest_kernel_mod);
     const host_tests = b.addTest(.{
         .root_module = host_test_mod,
     });
@@ -820,7 +884,8 @@ pub fn build(b: *std.Build) void {
     run_host_tests.dependOn(&b.addRunArtifact(elf_core_tests).step);
 
     // --- Limine binary fetch + host tool build ---
-    const cache_path = b.pathFromRoot(limine_cache);
+    const cache_path_raw = b.pathFromRoot(limine_cache);
+    const cache_path = posixPath(b, cache_path_raw);
     const fetch_limine = b.addSystemCommand(&.{
         "bash", "-c",
         b.fmt(
@@ -840,10 +905,14 @@ pub fn build(b: *std.Build) void {
     // --- ISO root layout ---
     const iso_root_rel = "zig-out/iso-root";
     const iso_path_rel = "zig-out/zinux.iso";
-    const root_path = b.pathFromRoot(iso_root_rel);
-    const iso_path = b.pathFromRoot(iso_path_rel);
-    const kernel_path = b.pathFromRoot("zig-out/bin/zinux-kernel");
-    const limine_conf_path = b.pathFromRoot("limine.conf");
+    const root_path_raw = b.pathFromRoot(iso_root_rel);
+    const root_path = posixPath(b, root_path_raw);
+    const iso_path_raw = b.pathFromRoot(iso_path_rel);
+    const iso_path = posixPath(b, iso_path_raw);
+    const kernel_path_raw = b.pathFromRoot("zig-out/bin/zinux-kernel");
+    const kernel_path = posixPath(b, kernel_path_raw);
+    const limine_conf_path_raw = b.pathFromRoot("limine.conf");
+    const limine_conf_path = posixPath(b, limine_conf_path_raw);
 
     const mk_iso_root = b.addSystemCommand(&.{
         "bash", "-c",

@@ -63,6 +63,12 @@ pub fn isRegistered(num: u64) bool {
         21 => true,
         // sys_wait.
         22 => true,
+        // sys_mem_map (Vaihe 28) — kartoittaa sivuja fuzzissa.
+        23 => true,
+        // sys_plugin_load (Vaihe 30) — lataa ELF:ää fuzzissa.
+        24 => true,
+        // sys_plugin_unload (Vaihe 30) — purkaa plugineja fuzzissa.
+        25 => true,
         // Kaikki muut slotit tyhjät tai taulukon ulkopuolella.
         else => false,
     };
@@ -112,6 +118,12 @@ pub fn isDangerous(num: u64) bool {
         21 => true,
         // sys_wait — riippuu prosessitaulukon tilasta.
         22 => true,
+        // sys_mem_map — allokoi kehyksiä ja kartoittaa sivuja fuzzissa.
+        23 => true,
+        // sys_plugin_load — lataa plugin-ELF:ää ja varaa pidejä fuzzissa.
+        24 => true,
+        // sys_plugin_unload — vapauttaa kehyksiä ja pidejä fuzzissa.
+        25 => true,
         // Muut numerot turvallisia tai ENOSYS.
         else => false,
     };

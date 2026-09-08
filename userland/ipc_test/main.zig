@@ -1,6 +1,6 @@
 //! IPC userland boot-testi — ipc.zig send/recv roundtrip ring 3:ssa.
 //!
-//! **Vastuu**: Testaa ipc.zig send ja recv capability-slotilla 4.
+//! **Vastuu**: Testaa ipc.zig send ja recv kernelin antamalla capability-slotilla.
 //! **Riippuvuudet**: `ipc`, `syscall.zig`
 //! **Käytetään**: start.S → ipcMain
 
@@ -9,10 +9,20 @@ const ipc = @import("ipc");
 // Tuo syscall wrapperit tulostukseen ja paluuseen.
 const sc = @import("syscall.zig");
 
+// Kiinteä .capboot-osoite — kernel kirjoittaa portti-slotin ennen ring 3 -hyppyä.
+const IPC_PARENT_SLOT_VADDR: u64 = 0xFFFFFFFF90061000;
+
 // IPC-testin sisäänkäynti — start.S kutsuu tätä.
 export fn ipcMain() void {
-    // Capability-slotti 4 — kernel ipc_userland luo viidennen slotin.
-    const slot: u32 = 4;
+    // Portti-capabilityn slotti — kernel ipc_userland kirjoittaa .capboot:iin.
+    const slot = @as(*const u32, @ptrFromInt(IPC_PARENT_SLOT_VADDR)).*;
+    // Jos slotti puuttuu, send/recv epäonnistuu varmasti.
+    if (slot == 0) {
+        // Boot-info puuttuu.
+        sc.print("ipc boot slot missing\n");
+        // Palaa kerneliin.
+        sc.sysTestReturn();
+    }
     // Lähetettävä testiviesti.
     const msg = "IPC";
     // Lähetä ipc-kirjaston send()-funktiolla.

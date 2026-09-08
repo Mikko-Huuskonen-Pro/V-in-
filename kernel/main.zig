@@ -112,6 +112,7 @@ fn kmain() noreturn {
     log.info("VMM initialized");
     // Laske KASLR-slide ennen heap/user-kartoitusta (Vaihe 7.3).
     kaslr.init(boot_info.hhdm_offset);
+    log.info("KSLM initialized");
     // Alusta kernel heap — kartoittaa INITIAL_PAGES sivua slidattuun alkuun.
     heap.init();
     // Vahvista KASLR-slide aktivoitunut.

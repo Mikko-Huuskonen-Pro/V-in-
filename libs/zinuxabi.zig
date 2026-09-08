@@ -48,6 +48,10 @@ pub const SYS_cap_transfer: u64 = 21;
 pub const SYS_wait: u64 = 22;
 // Syscall-numero: sys_mem_map(slot, addr, flags) → kirjoitettu määrä veya neg. virhe (Vaihe 28).
 pub const SYS_mem_map: u64 = 23;
+// Syscall-numero: sys_plugin_load(embedded_id, req_type, req_rights, scope_types, scope_rights, max_caps) → uusi pid tai neg. virhe (Vaihe 30).
+pub const SYS_plugin_load: u64 = 24;
+// Syscall-numero: sys_plugin_unload(pid) → 0 onnistui tai neg. virhe (Vaihe 30).
+pub const SYS_plugin_unload: u64 = 25;
 // Syscall-numero: sys_test_return — palaa kernel boot-testiin (vain kehitys).
 pub const SYS_test_return: u64 = 10;
 
