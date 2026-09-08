@@ -78,6 +78,53 @@ The kernel then decides which capabilities can actually be granted.
 The AI may request a capability, but it cannot grant one to itself.
 
 ---
+
+## Snapshot & Recovery (aka prince of persia)
+
+VSL is designed to be a recoverable plugin.
+
+Väinö can create snapshots of a plugin’s state before potentially destructive operations.
+
+```
+AI / User
+    │
+    ▼
+ Request change
+    │
+    ▼
+Väinö policy
+    │
+    ▼
+  SNAPSHOT
+    │
+    ▼
+    VSL
+    │
+    ▼
+Linux environment
+    │
+    ├── success ──────► commit
+    │
+    └── crash/failure
+             │
+             ▼
+          rollback
+             │
+             ▼
+       known-good state
+```
+
+The snapshot mechanism belongs to Väinö Core, not to Linux.
+
+This allows Väinö to treat complex environments such as VSL as isolated, recoverable components.
+
+The long-term goal is to make plugin operations transactional:
+
+**Experiment → Validate → Commit or Rollback**
+
+This becomes especially important when AI-generated code or drivers are involved.
+
+---
 ## Standing on Linux's shoulders
 
 Väinö would not exist in its current form without the extraordinary engineering effort behind Linux and its ecosystem.
