@@ -1,6 +1,6 @@
 
 
-# Väinö
+# Väinö (01010110 11000011 10100100 01101001 01101110 11000011 10110110)
 
 **Traditional operating systems stock drivers. Väinö builds them.**
 
