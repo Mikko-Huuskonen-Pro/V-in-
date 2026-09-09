@@ -819,18 +819,45 @@ zig build boot-test
 - `zig build` + `zig build -Dboot=full` (freestanding kernel incl. new boot test) → passed.
 - QEMU `boot-test` serial (`Task compose OK`, `Task run OK`, `Task decompose OK`, `Core only. Ready for next task.`) → pending CI (no QEMU/xorriso on dev machine, same as phases 29–33).
 
-#### Phase 35 — Federated Zinux (Clustered Capabilities)
+#### Phase 35 — Federated Zinux (Clustered Capabilities) ✅
 
 > **Goal**: Capability delegation across machines; remote plugin migration + failover.
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| 35.1 | Capability tunnel over TCP (tuple + HMAC) | `kernel/net/cap_tunnel.zig` | ⬜ |
-| 35.2 | Remote IPC userland library (transparent forwarding) | `userland/remote_ipc/` | ⬜ |
-| 35.3 | Plugin migration: snapshot→push→restore on target | `kernel/migrate.zig` | ⬜ |
-| 35.4 | Failover: heartbeat + plugin replication on node loss | `kernel/failover.zig` | ⬜ |
+| 35.1 | Capability tunnel over TCP (tuple + HMAC) | `kernel/net/cap_tunnel.zig` | ✅ HMAC-SHA256 seal/open + replay window (loopback wire — real TCP is 35.x, see F-L1) |
+| 35.2 | Remote IPC userland library (transparent forwarding) | `userland/remote_ipc/` | ✅ `forwarder.zig` route table + length gate |
+| 35.3 | Plugin migration: snapshot→push→restore on target | `kernel/migrate.zig` | ✅ all-or-nothing plan state machine + continuity proof |
+| 35.4 | Failover: heartbeat + plugin replication on node loss | `kernel/failover.zig` | ✅ heartbeat/sweep cluster + spare-promotion policy |
 
 **Dependency**: Phase 31 (IPC), Phase 33 (snapshot-based migration). Largest new code surface in this stretch.
+
+**Test**:
+```bash
+zig build test
+# hmac (FIPS + RFC 4231) + tunnel + forwarder + migrate + failover host tests OK (124 passed)
+zig build boot-test
+# Expected serial: Node A joined, Node B joined, Uptime plugin migrated A->B,
+# Node A left, Failover: uptime plugin replicated on B, Federated cluster OK,
+# All boot tests OK
+```
+
+**Implementation summary:**
+- **HMAC core** (`kernel/net/hmac.zig`, dependency-free pure logic, host-testable): standard SHA-256 (FIPS 180-4) + HMAC-SHA256 (RFC 2104) with streaming `Sha256{init,update,final}` — no novel crypto (prior-art principle). Verified against FIPS vectors (`""`, `"abc"`) and RFC 4231 cases 1–2.
+- **Tunnel** (`kernel/net/cap_tunnel.zig`, pure, shares one `fed_hmac` instance in both graphs — same pattern as `composer_task`): 33-byte canonical tuple `{src_node, src_pid, src_slot, dest_node, rights_mask, nonce}` + MAC. `sealNext` assigns monotonic nonces (0 reserved — zeroed memory never forms a message); `open` checks known-peer → fresh-nonce → valid-MAC, advancing the replay window only on accept. Named errors: `UnknownPeer` (join gate) / `Replay` / `BadMac` / `BadVersion` / `NoSlot`.
+- **Forwarder** (`userland/remote_ipc/forwarder.zig`, pure value type): 8-entry `RemotePort` table, idempotent `register`, `route(node,slot)` for incoming frames, `checkSend` length gate at `port.MAX_MSG_SIZE` parity (never fragments). Carries routes, never capabilities — I1 holds across the wire.
+- **Migration** (`kernel/migrate.zig`, pure): `idle → staged → restored → done` (or `aborted`); `notePushed` requires `bridged == total` (all-or-nothing, same discipline as 33-swap `fail_bridge`); rejects ghost pids, zero nodes, self-loops. Owned-state migration still needs 31.5 snapshots (documented F-L3).
+- **Failover** (`kernel/failover.zig`, pure): `Cluster{join,heartbeat,leave,sweep,aliveCount}` on a caller tick clock (deterministic, `decomposer`-pattern); `ReplicaPlan{home,spare}` promotes only on confirmed home death with live spare + serving pid, else visibly `orphaned`.
+- **Boot test** (`kernel/federate.zig`, registered after Phase 34): A+B join, grant-scoped PA + BOOT-owned shared port, sealed push over the loopback wire (F-L1 stand-in for TCP) with three in-boot negatives (replay/tamper/ghost), gateway-authorized install (MAC ≠ permission), live FED1 message, forwarder route proof, push 1/1 → run → restore → drain A → done, FED3 continuity via the surviving shared port, sweep-proven A-loss → spare promotion, full cleanup with zero-survivor check.
+- **Trust doc** (`docs/FEDERATION.md`): authenticate-vs-authorize split, honest limits table F-L1…F-L5 (loopback wire, TEST-ONLY key, no owned-state migration, non-constant-time compare, single spare).
+- **Wiring**: `build.zig` kernel modules `fed_hmac` + `remote_forwarder` (tunnel/migrate/failover travel relatively via `federate.zig`, scope-pattern) and host modules `fed_hmac/fed_tunnel/remote_forwarder/fed_migrate/fed_failover`; `tests/host/federate_test.zig` (5 tests + import shim) registered in `tests/host/root.zig`.
+- **Key design decision**: a valid MAC is an envelope, not a capability — installation always re-passes the Phase 31 scope gate. A compromised peer key can at most request, never escalate.
+
+**Verification evidence (2026-09-09):**
+- `zig build test --summary all` → 124 host tests passed (118 baseline + 5 new federate tests + 1 import shim).
+- `zig build` + `zig build -Dboot=full` (freestanding kernel incl. new boot test) → passed.
+- Ground-truth cross-check: all 4 crypto vectors verified byte-for-byte against Python `hashlib`/`hmac` before acceptance (caught 3 transcription typos — evidence for never trusting hand-copied constants).
+- QEMU `boot-test` serial (`Node A joined`, `Uptime plugin migrated A->B`, `Failover: uptime plugin replicated on B`, `Federated cluster OK`) → pending CI (no QEMU/xorriso on dev machine, same as phases 29–34).
 
 #### Phase 36 — Hardware-as-a-Service (Design / Research)
 

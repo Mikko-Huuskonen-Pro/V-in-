@@ -87,6 +87,24 @@ pub fn build(b: *std.Build) void {
     composer_resolve_kernel_mod.single_threaded = true;
     composer_resolve_kernel_mod.addImport("composer_task", composer_task_kernel_mod);
     kernel_mod.addImport("composer_resolve", composer_resolve_kernel_mod);
+    // Vaihe 35.2 — etä-IPC-välittäjä kerneliin (cross-root → build-moduuli).
+    // HMAC/tunneli/migraatio/failover kulkevat suhteellisina federate.zig:n
+    // kautta (sama hakemistokaava kuin scope/manifest — ei build-moduulia).
+    const remote_forwarder_kernel_mod = b.createModule(.{
+        .root_source_file = b.path("userland/remote_ipc/forwarder.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    remote_forwarder_kernel_mod.single_threaded = true;
+    kernel_mod.addImport("remote_forwarder", remote_forwarder_kernel_mod);
+    // Vaihe 35.1 — HMAC-ydin kerneliin (tunnelin jaettu instanssi).
+    const fed_hmac_kernel_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/net/hmac.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    fed_hmac_kernel_mod.single_threaded = true;
+    kernel_mod.addImport("fed_hmac", fed_hmac_kernel_mod);
 
     // Prosessitaulukko — capability-slotit per pid (Vaihe 20).
     const process_core_kernel_mod = b.createModule(.{
@@ -964,6 +982,40 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     host_test_mod.addImport("decomposer_core", decomposer_core_mod);
+    // Vaihe 35.1 — HMAC + tunneliytdin host-testeihin (riippuvuudettomat).
+    const fed_hmac_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/net/hmac.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("fed_hmac", fed_hmac_mod);
+    const fed_tunnel_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/net/cap_tunnel.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    fed_tunnel_mod.addImport("fed_hmac", fed_hmac_mod);
+    host_test_mod.addImport("fed_tunnel", fed_tunnel_mod);
+    // Vaihe 35.2 — etävälittäjä host-testeihin (riippuvuudeton).
+    const remote_forwarder_mod = b.createModule(.{
+        .root_source_file = b.path("userland/remote_ipc/forwarder.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("remote_forwarder", remote_forwarder_mod);
+    // Vaihe 35.3/35.4 — migraatio + failover host-testeihin (riippuvuudettomat).
+    const fed_migrate_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/migrate.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("fed_migrate", fed_migrate_mod);
+    const fed_failover_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/failover.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("fed_failover", fed_failover_mod);
     const host_tests = b.addTest(.{
         .root_module = host_test_mod,
     });

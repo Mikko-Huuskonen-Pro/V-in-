@@ -150,3 +150,8 @@ test {
 test {
     _ = @import("composer_test.zig");
 }
+
+// Tuo federaation yksikkötestit: HMAC + tunneli + välittäjä + migraatio + failover (Vaihe 35).
+test {
+    _ = @import("federate_test.zig");
+}

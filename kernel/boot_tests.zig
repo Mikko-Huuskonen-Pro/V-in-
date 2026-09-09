@@ -203,6 +203,9 @@ pub fn runAll() void {
     // Vaihe 34 — tehtäväpohjainen koostaminen: TDL → compose → run → decompose.
     const composer = @import("composer.zig");
     composer.runBootTest();
+    // Vaihe 35 — federaatio: klusteri → tunneli → migraatio → failover.
+    const federate = @import("federate.zig");
+    federate.runBootTest();
     // Kaikki integraatiotestit ajettu.
     log.info("All boot tests OK");
 }
