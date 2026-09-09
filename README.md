@@ -78,6 +78,25 @@ The kernel then decides which capabilities can actually be granted.
 The AI may request a capability, but it cannot grant one to itself.
 
 ---
+
+## Snapshot & Recovery (aka prince of persia)
+
+Plugins is designed to be a recoverable.
+
+Väinö can create snapshots of a plugin’s state before potentially destructive operations.
+
+The snapshot mechanism belongs to Väinö Core, not for plugins.
+
+This allows Väinö to treat complex environments such as VSL (Väinö subsystem for linux)as isolated, recoverable components.
+
+The long-term goal is to make plugin operations transactional:
+
+**Experiment → Validate → Commit or Rollback**
+
+This becomes especially important when AI-generated code or drivers are involved.
+
+---
+
 ## Standing on Linux's shoulders
 
 Väinö would not exist in its current form without the extraordinary engineering effort behind Linux and its ecosystem.
@@ -87,7 +106,7 @@ For more than three decades, Linux developers have built and maintained an enorm
 We do not intend to throw that work away: [VSL](https://github.com/Mikko-Huuskonen-Pro/VSL)
 
 Where Linux has already solved a problem well, Väinö can build on it.
-The linux-väinö repository provides a path to preserve and use that existing hardware support while Väinö explores a fundamentally different approach to drivers.
+The VSL repository provides a path to preserve and use that existing hardware support while Väinö explores a fundamentally different approach to drivers.
 
 > **35 years of engineering is not something to replace. It is something to stand on.**
 
