@@ -145,3 +145,8 @@ test {
 test {
     _ = @import("plugin_heal_test.zig");
 }
+
+// Tuo TDL + composer + decomposer -yksikkötestit (Vaihe 34).
+test {
+    _ = @import("composer_test.zig");
+}

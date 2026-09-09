@@ -70,6 +70,23 @@ pub fn build(b: *std.Build) void {
     });
     plugin_manifest_kernel_dep.single_threaded = true;
     kernel_mod.addImport("plugin_manifest", plugin_manifest_kernel_dep);
+    // Vaihe 34.1/34.2 — TDL-spec + composer-heuristiikka kerneliin.
+    // Jaettu `composer_task`-instanssi molemmille (ei kahta tyyppi-instanssia).
+    const composer_task_kernel_mod = b.createModule(.{
+        .root_source_file = b.path("userland/composer/task.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    composer_task_kernel_mod.single_threaded = true;
+    kernel_mod.addImport("composer_task", composer_task_kernel_mod);
+    const composer_resolve_kernel_mod = b.createModule(.{
+        .root_source_file = b.path("userland/composer/resolve.zig"),
+        .target = target,
+        .optimize = if (optimize == .Debug) .ReleaseSafe else optimize,
+    });
+    composer_resolve_kernel_mod.single_threaded = true;
+    composer_resolve_kernel_mod.addImport("composer_task", composer_task_kernel_mod);
+    kernel_mod.addImport("composer_resolve", composer_resolve_kernel_mod);
 
     // Prosessitaulukko — capability-slotit per pid (Vaihe 20).
     const process_core_kernel_mod = b.createModule(.{
@@ -925,6 +942,28 @@ pub fn build(b: *std.Build) void {
         .optimize = .Debug,
     });
     host_test_mod.addImport("plugin_diag_core", plugin_diag_core_mod);
+    // Vaihe 34.1/34.2 — TDL + composer-heuristiikka host-testeihin.
+    // Jaettu `composer_task`-instanssi (sama kaava kuin capability/process).
+    const composer_task_mod = b.createModule(.{
+        .root_source_file = b.path("userland/composer/task.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("composer_task", composer_task_mod);
+    const composer_resolve_mod = b.createModule(.{
+        .root_source_file = b.path("userland/composer/resolve.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    composer_resolve_mod.addImport("composer_task", composer_task_mod);
+    host_test_mod.addImport("composer_resolve", composer_resolve_mod);
+    // Vaihe 34.4 — decomposer-purkupolitiikka host-testeihin (riippuvuudeton).
+    const decomposer_core_mod = b.createModule(.{
+        .root_source_file = b.path("kernel/decomposer.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_test_mod.addImport("decomposer_core", decomposer_core_mod);
     const host_tests = b.addTest(.{
         .root_module = host_test_mod,
     });

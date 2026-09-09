@@ -782,18 +782,42 @@ zig build boot-test
 - `zig build` + `zig build -Dboot=full` (freestanding kernel incl. new boot test) → passed.
 - QEMU `boot-test` serial (`Plugin heal validation OK`, `Plugin diagnostics OK`, `Self-heal OK`) → pending CI (no QEMU/xorriso on dev machine, same as phases 29–31).
 
-#### Phase 34 — Task-Driven Composition (The Eeden Phase)
+#### Phase 34 — Task-Driven Composition (The Eeden Phase) ✅
 
 > **Goal**: User declares a task → Zinux composes minimal environment → runs → decomposes.
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| 34.1 | Task Description Language (TDL) spec doc | `docs/TDL.md` | ⬜ |
-| 34.2 | AI-heuristic composer: resolve task→plugins | `userland/composer/` | ⬜ |
-| 34.3 | Core orchestrator: receives TDL, resolves caps, installs plugins | `kernel/composer.zig` | ⬜ |
-| 34.4 | Decompose on task-complete / timeout (LIFO plugin kill) | `kernel/decomposer.zig` | ⬜ |
+| 34.1 | Task Description Language (TDL) spec doc | `docs/TDL.md` | ✅ grammar + canonical TaskSpec + C1–C5 invariants |
+| 34.2 | AI-heuristic composer: resolve task→plugins | `userland/composer/` | ✅ `task.zig` parse/validate + `resolve.zig` 1:1 heuristic |
+| 34.3 | Core orchestrator: receives TDL, resolves caps, installs plugins | `kernel/composer.zig` | ✅ manifest+scope gate per plugin + `Task compose OK` boot test |
+| 34.4 | Decompose on task-complete / timeout (LIFO plugin kill) | `kernel/decomposer.zig` | ✅ pure LIFO+expiry policy + `Task decompose OK` boot test |
 
 **Dependency**: Phases 30+32 (plugin load + registry). Phase 33 (self-healing guarantees).
+
+**Test**:
+```bash
+zig build test
+# tdl + resolve + decomposer host tests OK (118 passed)
+zig build boot-test
+# Expected serial: Task received: http+uptime, Composing system...,
+# Task compose OK, Task run OK, Task complete, Decomposing...,
+# Task decompose OK, Core only. Ready for next task., All boot tests OK
+```
+
+**Implementation summary:**
+- **TDL core** (`userland/composer/task.zig`, dependency-free pure logic, host-testable): `TaskSpec{name[32], needs[8], timeout, max_plugins, version=1}` with line-oriented `;`-parser (no JSON — no `std.json` freestanding) + stable `validate` order `BadName → BadVersion → TooManyNeeds → BadNeedType → BadRights → BadBounds` (+ `ParseError` for syntax). ABI numbers match scope/manifest (1=port, 5=memory; read..grant bits 0..5).
+- **Heuristic** (`userland/composer/resolve.zig`, dumb stand-in for the future AI composer): N needs → N `PluginReq`s, `scope_rights == req_rights` (no broadening by construction), single-type scopes, ceiling contradiction → `TooManyPlugins`. Shared `composer_task` module instance in both graphs (same pattern as `capability/process_core` — no duplicate-type split).
+- **Orchestrator** (`kernel/composer.zig`, freestanding): per-plugin `buildSingleCapManifest → checkManifest → initScope/validate → checkScope` gate (same gate as `sys_plugin_load`, pid rebound to loaded pid — S1 lesson), abort unwinds LIFO (C2, no partial environments), single active composition (documented limit).
+- **Decomposer** (`kernel/decomposer.zig`, dependency-free pure policy like `scope.zig`): `lifoAt/lifoOrder` tail-first teardown (append-only table stays hole-free), `isExpired` (`now >= deadline` — timeout is a kernel bound, not a hint), `shouldDecompose(complete/expired/failed)`.
+- **Boot test** (`composer.runBootTest`, registered after Phase 33): syntax-escalation + ceiling negatives (nothing loaded), 2-plugin compose with `reqNarrowsNeed` no-broadening proof, ring-3 run (`plg` × 2), deadline predicate wiring, LIFO decompose with zero-survivor check (C5).
+- **Wiring**: `build.zig` kernel modules `composer_task` + `composer_resolve` (shared instance) and host modules + `decomposer_core`; `tests/host/composer_test.zig` (5 tests) registered in `tests/host/root.zig`.
+- **Key design decision**: policy (`decomposer.zig`, pure) vs. mechanism (`composer.zig` + `loader`, freestanding) split — the order/expiry decision is host-testable without hardware; only the load/unload loop touches kernel state.
+
+**Verification evidence (2026-09-09):**
+- `zig build test --summary all` → 118 host tests passed (incl. 5 new TDL/resolve/decomposer tests).
+- `zig build` + `zig build -Dboot=full` (freestanding kernel incl. new boot test) → passed.
+- QEMU `boot-test` serial (`Task compose OK`, `Task run OK`, `Task decompose OK`, `Core only. Ready for next task.`) → pending CI (no QEMU/xorriso on dev machine, same as phases 29–33).
 
 #### Phase 35 — Federated Zinux (Clustered Capabilities)
 

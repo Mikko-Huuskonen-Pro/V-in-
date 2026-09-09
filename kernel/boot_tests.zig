@@ -200,6 +200,9 @@ pub fn runAll() void {
     // Vaihe 33 — self-heal: diagnostiikka + validointi + hot-swap (sama pid).
     const plugin_heal = @import("syscall/plugin_heal_syscall.zig");
     plugin_heal.runBootTest();
+    // Vaihe 34 — tehtäväpohjainen koostaminen: TDL → compose → run → decompose.
+    const composer = @import("composer.zig");
+    composer.runBootTest();
     // Kaikki integraatiotestit ajettu.
     log.info("All boot tests OK");
 }
